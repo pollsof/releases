@@ -4,31 +4,40 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pollaris - Downloads</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Ubuntu:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    background: #f5f5f5;
-    color: #222;
+    font-family: 'Ubuntu', sans-serif;
+    background: #0d1117;
+    color: #e6edf3;
     line-height: 1.5;
   }
 
   header {
-    background: #fff;
-    border-bottom: 1px solid #ddd;
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
     padding: 32px 0 24px;
     text-align: center;
+  }
+
+  header img {
+    height: 40px;
+    margin-bottom: 12px;
   }
 
   header h1 {
     font-size: 28px;
     font-weight: 700;
     letter-spacing: -0.5px;
+    color: #e6edf3;
   }
 
   header p {
-    color: #666;
+    color: #8b949e;
     margin-top: 4px;
     font-size: 15px;
   }
@@ -40,21 +49,21 @@
   }
 
   section {
-    background: #fff;
-    border: 1px solid #ddd;
+    background: #161b22;
+    border: 1px solid #30363d;
     border-radius: 8px;
     margin-bottom: 24px;
     overflow: hidden;
   }
 
   section h2 {
-    font-size: 16px;
-    font-weight: 600;
-    padding: 16px 20px;
-    border-bottom: 1px solid #eee;
+    font-size: 14px;
+    font-weight: 700;
+    padding: 14px 20px;
+    border-bottom: 1px solid #30363d;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: #444;
+    color: #0099ff;
   }
 
   .item {
@@ -62,7 +71,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 14px 20px;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid #21262d;
     gap: 12px;
   }
 
@@ -75,13 +84,14 @@
   }
 
   .item-name {
-    font-weight: 600;
+    font-weight: 500;
     font-size: 15px;
+    color: #e6edf3;
   }
 
   .item-detail {
     font-size: 13px;
-    color: #888;
+    color: #8b949e;
     margin-top: 2px;
   }
 
@@ -90,21 +100,22 @@
     align-items: center;
     gap: 6px;
     padding: 8px 16px;
+    font-family: 'Ubuntu', sans-serif;
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
     text-decoration: none;
     border-radius: 6px;
-    border: 1px solid #ddd;
-    background: #fff;
-    color: #333;
+    border: 1px solid #0099ff;
+    background: transparent;
+    color: #0099ff;
     white-space: nowrap;
-    transition: background 0.15s, border-color 0.15s;
+    transition: background 0.15s, color 0.15s;
     cursor: pointer;
   }
 
   .btn:hover {
-    background: #f0f0f0;
-    border-color: #bbb;
+    background: #0099ff;
+    color: #fff;
   }
 
   .btn svg {
@@ -116,14 +127,14 @@
   .empty {
     padding: 20px;
     text-align: center;
-    color: #999;
+    color: #8b949e;
     font-size: 14px;
   }
 
   .loading {
     padding: 24px;
     text-align: center;
-    color: #999;
+    color: #8b949e;
     font-size: 14px;
   }
 
@@ -131,7 +142,7 @@
     text-align: center;
     padding: 24px 16px;
     font-size: 13px;
-    color: #aaa;
+    color: #484f58;
   }
 
   @media (max-width: 480px) {
@@ -143,7 +154,8 @@
 <body>
 
 <header>
-  <h1>Pollaris Downloads</h1>
+  <img src="https://www.pollaris.com.br/PollarisWhite.svg" alt="Pollaris">
+  <h1>Downloads</h1>
   <p>Atualizações e instaladores</p>
 </header>
 
@@ -164,7 +176,7 @@
   </section>
 </main>
 
-<footer>Pollaris Software</footer>
+<footer>Pollaris Software &amp; Solução</footer>
 
 <script>
 const BASE = location.origin;
