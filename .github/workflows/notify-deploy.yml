@@ -1,0 +1,38 @@
+name: Notificar deploy
+
+on:
+  deployment_status:
+
+jobs:
+  notify:
+    if: >-
+      github.event.deployment_status.state == 'success' &&
+      github.event.deployment.environment == 'github-pages'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Obter mensagem do commit
+        id: commit
+        uses: actions/github-script@v7
+        with:
+          result-encoding: string
+          script: |
+            const { data } = await github.rest.repos.getCommit({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              ref:   context.payload.deployment.sha,
+            });
+            return data.commit.message;
+
+      - name: Enviar notificação Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          COMMIT_MSG: ${{ steps.commit.outputs.result }}
+          DEPLOY_URL: https://releases.pollaris.com.br
+        run: |
+          TEXT=$(printf '✅ GitHub Pages atualizado!\n\n📝 %s\n🔗 %s' "$COMMIT_MSG" "$DEPLOY_URL")
+          jq -n --arg chat_id "$TELEGRAM_CHAT_ID" --arg text "$TEXT" \
+            '{chat_id: $chat_id, text: $text}' \
+          | curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -H "Content-Type: application/json" \
+              -d @-
