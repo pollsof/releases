@@ -150,7 +150,13 @@ export default {
     const matchRemover = text.match(/^\/remover\s+(\S+)\s+(\S+)/i);
     if (matchRemover) {
       const produto = matchRemover[1].toLowerCase();
-      const cnpj    = matchRemover[2];
+      const cnpj    = normalizeDigits(matchRemover[2]);
+
+      if (!cnpj) {
+        await reply(`\u274C CPF/CNPJ inválido: *${esc(matchRemover[2])}*`, true);
+        return new Response('OK', { status: 200 });
+      }
+
       const path    = `${produto}/${cnpj}.json`;
       try {
         const res = await ghGet(env.GITHUB_TOKEN, env.REPO_OWNER, env.REPO_NAME, path);
@@ -188,7 +194,13 @@ export default {
       }
 
       try {
-        const alvo     = arg3 ?? sistema;
+        const alvo     = arg3 ? normalizeDigits(arg3) : sistema;
+
+        if (arg3 && !alvo) {
+          await reply(`\u274C CPF/CNPJ inválido: *${esc(arg3)}*`, true);
+          return new Response('OK', { status: 200 });
+        }
+
         const destPath = `${sistema}/${alvo}.json`;
         let contentB64;
 
@@ -329,6 +341,10 @@ function sendMessage(token, chatId, text, markdown = false) {
 
 function splitEnv(str) {
   return (str ?? '').split(',').map(s => s.trim()).filter(Boolean);
+}
+
+function normalizeDigits(str) {
+  return String(str ?? '').replace(/\D/g, '');
 }
 
 function esc(str) {
