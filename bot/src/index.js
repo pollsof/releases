@@ -9,6 +9,7 @@
  *   /liberar {sistema}                    -> copia {sistema}/teste.json -> {sistema}/{sistema}.json
  *   /liberar {sistema} {versao}           -> gera {sistema}/{sistema}.json com a versao informada
  *   /liberar {sistema} {versao} {cnpj}    -> gera {sistema}/{cnpj}.json com a versao informada
+ *                                         (consulta {sistema}/{versao}.json se existir; senao template {sistema}-v{versao})
  *   /remover {sistema} {cnpj}             -> remove {sistema}/{cnpj}.json do repositorio
  *   /versao  {sistema}                    -> exibe conteudo atual de {sistema}/teste.json
  *   /produtos                             -> lista os produtos disponiveis
@@ -205,12 +206,19 @@ export default {
         let contentB64;
 
         if (arg2) {
-          // Versao informada: gerar JSON
+          // Versao informada: gerar JSON (manifest por versao tem prioridade sobre template)
           const versao = arg2;
-          const vUnder = versao.replace(/\./g, '_');
-          const url    = `https://github.com/${env.REPO_OWNER}/${env.REPO_NAME}/releases/download/${sistema}-v${versao}/pollaris.${sistema}_${vUnder}.zip`;
-          const json   = JSON.stringify({ versao, url, obrigatorio: true });
-          contentB64   = btoa(json);
+          const manifestPath = `${sistema}/${versao}.json`;
+          const srcRes = await ghGet(env.GITHUB_TOKEN, env.REPO_OWNER, env.REPO_NAME, manifestPath);
+
+          if (srcRes.ok) {
+            contentB64 = (await srcRes.json()).content;
+          } else {
+            const vUnder = versao.replace(/\./g, '_');
+            const url    = `https://github.com/${env.REPO_OWNER}/${env.REPO_NAME}/releases/download/${sistema}-v${versao}/pollaris.${sistema}_${vUnder}.zip`;
+            const json   = JSON.stringify({ versao, url, obrigatorio: true });
+            contentB64   = btoa(json);
+          }
         } else {
           // Sem versao: copiar de teste.json
           const srcPath = `${sistema}/teste.json`;
