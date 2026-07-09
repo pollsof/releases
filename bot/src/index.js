@@ -208,6 +208,24 @@ export default {
         if (arg2) {
           // Versao informada: gerar JSON (manifest por versao tem prioridade sobre template)
           const versao = arg2;
+
+          if (isPrVersion(versao)) {
+            if (arg3) {
+              await reply(
+                `\u274C Vers\u00F5es de PR n\u00E3o podem ser liberadas por CNPJ.\n` +
+                `Use o seletor de vers\u00E3o no Green com *Colaborando* ativo.`,
+                true
+              );
+              return new Response('OK', { status: 200 });
+            }
+            await reply(
+              `\u274C Vers\u00F5es de PR n\u00E3o podem ser liberadas para produ\u00E7\u00E3o (\`${esc(sistema)}.json\`).\n` +
+              `Use o seletor de vers\u00E3o no Green com *Colaborando* ativo.`,
+              true
+            );
+            return new Response('OK', { status: 200 });
+          }
+
           const manifestPath = `${sistema}/${versao}.json`;
           const srcRes = await ghGet(env.GITHUB_TOKEN, env.REPO_OWNER, env.REPO_NAME, manifestPath);
 
@@ -361,4 +379,11 @@ function esc(str) {
 
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Versao de PR: 3o segmento > 0 (ex.: 3.0.27.1). Main: 3.0.0.111 */
+function isPrVersion(versao) {
+  const parts = String(versao ?? '').split('.').map(Number);
+  if (parts.length < 4 || parts.some(n => Number.isNaN(n))) return false;
+  return parts[2] > 0;
 }
