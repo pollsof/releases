@@ -6,6 +6,7 @@ on:
     paths:
       - 'bot/**'
       - '.github/workflows/deploy-bot.yml'
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -16,20 +17,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validar secrets do Cloudflare
-        env:
-          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          if [ -z "$CF_TOKEN" ]; then
-            echo "::error::Configure o secret CLOUDFLARE_API_TOKEN em Settings > Secrets and variables > Actions"
-            exit 1
-          fi
-          if [ -z "$CF_ACCOUNT" ]; then
-            echo "::error::Configure o secret CLOUDFLARE_ACCOUNT_ID em Settings > Secrets and variables > Actions"
-            exit 1
-          fi
-
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -37,7 +24,28 @@ jobs:
           cache-dependency-path: bot/package-lock.json
 
       - name: Instalar dependencias
-        run: npm install
+        run: npm ci
+
+      - name: Validar bundle do Worker
+        run: npx wrangler deploy --dry-run
+
+      - name: Validar secrets do Cloudflare
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CF_TOKEN" ]; then
+            echo "::error::Secret CLOUDFLARE_API_TOKEN nao configurado."
+            echo "Crie um token em https://dash.cloudflare.com/profile/api-tokens com permissao 'Edit Cloudflare Workers'."
+            echo "Depois adicione em Settings > Secrets and variables > Actions > New repository secret."
+            exit 1
+          fi
+          if [ -z "$CF_ACCOUNT" ]; then
+            echo "::error::Secret CLOUDFLARE_ACCOUNT_ID nao configurado."
+            echo "O Account ID fica em https://dash.cloudflare.com/ (barra lateral direita da home)."
+            echo "Adicione como secret CLOUDFLARE_ACCOUNT_ID em Settings > Secrets and variables > Actions."
+            exit 1
+          fi
 
       - name: Deploy Cloudflare Worker
         env:
