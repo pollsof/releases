@@ -20,7 +20,7 @@
  *   /usuarios                             -> lista todos os usuarios autorizados
  */
 
-const BOT_VERSION = '2.2.0';
+const BOT_VERSION = '2.3.0';
 
 export default {
   async fetch(request, env) {
