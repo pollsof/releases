@@ -20,7 +20,7 @@
  *   /usuarios                             -> lista todos os usuarios autorizados
  */
 
-const BOT_VERSION = '2.1.0';
+const BOT_VERSION = '2.2.0';
 
 export default {
   async fetch(request, env) {
@@ -78,53 +78,58 @@ export default {
       return new Response('OK', { status: 200 });
     }
 
-    if (!authorized) return new Response('OK', { status: 200 });
+    if (authorized) {
+      const matchAcesso = text.match(/^\/acesso(?:@\S+)?\s+(\d+)/i);
+      if (matchAcesso) {
+        if (!isRoot) return new Response('OK', { status: 200 });
+        await addUser(env, matchAcesso[1]);
+        await reply(`Acesso concedido para ID \`${matchAcesso[1]}\`.`, true);
+        return new Response('OK', { status: 200 });
+      }
 
-    const matchAcesso = text.match(/^\/acesso(?:@\S+)?\s+(\d+)/i);
-    if (matchAcesso) {
-      if (!isRoot) return new Response('OK', { status: 200 });
-      await addUser(env, matchAcesso[1]);
-      await reply(`Acesso concedido para ID \`${matchAcesso[1]}\`.`, true);
-      return new Response('OK', { status: 200 });
+      const matchRevogar = text.match(/^\/revogar(?:@\S+)?\s+(\d+)/i);
+      if (matchRevogar) {
+        if (!isRoot) return new Response('OK', { status: 200 });
+        await removeUser(env, matchRevogar[1]);
+        await reply(`Acesso revogado para ID \`${matchRevogar[1]}\`.`, true);
+        return new Response('OK', { status: 200 });
+      }
+
+      if (/^\/usuarios(?:@\S+)?/i.test(text)) {
+        if (!isRoot) return new Response('OK', { status: 200 });
+        await reply(await buildUsersText(env), true);
+        return new Response('OK', { status: 200 });
+      }
+
+      if (/^\/produtos(?:@\S+)?/i.test(text)) {
+        await reply(buildProductsText(env), true, productMenuKeyboard(env, 'cmd:menu'));
+        return new Response('OK', { status: 200 });
+      }
+
+      const matchVersao = text.match(/^\/versao(?:@\S+)?\s+(\S+)/i);
+      if (matchVersao) {
+        await handleVersao(ctx, matchVersao[1].toLowerCase(), reply);
+        return new Response('OK', { status: 200 });
+      }
+
+      const matchRemover = text.match(/^\/remover(?:@\S+)?\s+(\S+)\s+(\S+)/i);
+      if (matchRemover) {
+        await handleRemover(ctx, matchRemover[1].toLowerCase(), matchRemover[2], reply);
+        return new Response('OK', { status: 200 });
+      }
+
+      const matchLiberar = text.match(/^\/liberar(?:@\S+)?\s+(\S+)(?:\s+(\S+))?(?:\s+(\S+))?/i);
+      if (matchLiberar) {
+        await handleLiberar(ctx, matchLiberar[1].toLowerCase(), matchLiberar[2], matchLiberar[3], reply);
+        return new Response('OK', { status: 200 });
+      }
     }
 
-    const matchRevogar = text.match(/^\/revogar(?:@\S+)?\s+(\d+)/i);
-    if (matchRevogar) {
-      if (!isRoot) return new Response('OK', { status: 200 });
-      await removeUser(env, matchRevogar[1]);
-      await reply(`Acesso revogado para ID \`${matchRevogar[1]}\`.`, true);
-      return new Response('OK', { status: 200 });
-    }
-
-    if (/^\/usuarios(?:@\S+)?/i.test(text)) {
-      if (!isRoot) return new Response('OK', { status: 200 });
-      await reply(await buildUsersText(env), true);
-      return new Response('OK', { status: 200 });
-    }
-
-    if (/^\/produtos(?:@\S+)?/i.test(text)) {
-      await reply(buildProductsText(env), true, productMenuKeyboard(env, 'cmd:menu'));
-      return new Response('OK', { status: 200 });
-    }
-
-    const matchVersao = text.match(/^\/versao(?:@\S+)?\s+(\S+)/i);
-    if (matchVersao) {
-      await handleVersao(ctx, matchVersao[1].toLowerCase(), reply);
-      return new Response('OK', { status: 200 });
-    }
-
-    const matchRemover = text.match(/^\/remover(?:@\S+)?\s+(\S+)\s+(\S+)/i);
-    if (matchRemover) {
-      await handleRemover(ctx, matchRemover[1].toLowerCase(), matchRemover[2], reply);
-      return new Response('OK', { status: 200 });
-    }
-
-    const matchLiberar = text.match(/^\/liberar(?:@\S+)?\s+(\S+)(?:\s+(\S+))?(?:\s+(\S+))?/i);
-    if (matchLiberar) {
-      await handleLiberar(ctx, matchLiberar[1].toLowerCase(), matchLiberar[2], matchLiberar[3], reply);
-      return new Response('OK', { status: 200 });
-    }
-
+    await reply(
+      buildFallbackText(authorized, isRoot),
+      true,
+      mainMenuKeyboard(env, authorized, isRoot)
+    );
     return new Response('OK', { status: 200 });
   }
 };
@@ -277,6 +282,13 @@ function buildHelpText(isRoot) {
     lines.push('`/usuarios` - lista usuarios autorizados');
   }
   return lines.join('\n');
+}
+
+function buildFallbackText(authorized, isRoot) {
+  if (authorized) {
+    return 'Nao entendi essa mensagem. Use `/ajuda` para ver os comandos ou os botoes abaixo.';
+  }
+  return 'Ola! Nao entendi essa mensagem. Use `/ajuda` para ver o que posso fazer ou `/myid` para obter seu ID.';
 }
 
 function buildProductsText(env) {

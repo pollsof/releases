@@ -1,0 +1,7 @@
+{
+  "name": "pollaris-release-bot",
+  "private": true,
+  "devDependencies": {
+    "wrangler": "^4.110.0"
+  }
+}
