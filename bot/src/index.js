@@ -20,7 +20,7 @@
  *   /usuarios                             -> lista todos os usuarios autorizados
  */
 
-const BOT_VERSION = '2.3.0';
+const BOT_VERSION = '2.3.1';
 
 export default {
   async fetch(request, env) {
@@ -37,14 +37,21 @@ export default {
     const message = update?.message ?? update?.edited_message;
     if (!message?.text) return new Response('OK', { status: 200 });
 
-    const chatId     = message.chat.id;
-    const userId     = String(message.from?.id ?? '');
-    const rawText    = message.text.trim();
-    const isGroup    = message.chat.type === 'group' || message.chat.type === 'supergroup';
-    const botMention = env.BOT_USERNAME ? `@${env.BOT_USERNAME}` : null;
+    const chatId      = message.chat.id;
+    const userId      = String(message.from?.id ?? '');
+    const rawText     = message.text.trim();
+    const isGroup     = message.chat.type === 'group' || message.chat.type === 'supergroup';
+    const botUsername = await getBotUsername(env);
+    const botMention  = botUsername ? `@${botUsername}` : null;
 
-    if (isGroup && botMention && !rawText.includes(botMention)) {
-      return new Response('OK', { status: 200 });
+    if (isGroup) {
+      const mentioned = botMention &&
+        new RegExp(escapeRegex(botMention), 'i').test(rawText);
+      const replyToBot = botUsername &&
+        message.reply_to_message?.from?.username?.toLowerCase() === botUsername.toLowerCase();
+      if (!mentioned && !replyToBot) {
+        return new Response('OK', { status: 200 });
+      }
     }
 
     const text = normalizeCommandText(
@@ -513,6 +520,26 @@ function assertReleaseAllowed(manifest) {
 
 function normalizeCommandText(text) {
   return String(text ?? '').replace(/^(\/\w+)@\S+/i, '$1').trim();
+}
+
+// Username do bot: usa BOT_USERNAME se configurado; senao descobre via
+// getMe e guarda em cache no escopo do modulo (persiste por isolate).
+// Sem username conhecido, o bot fica mudo em grupos para nao responder tudo.
+let cachedBotUsername = null;
+
+async function getBotUsername(env) {
+  if (env.BOT_USERNAME) return String(env.BOT_USERNAME).replace(/^@/, '');
+  if (cachedBotUsername) return cachedBotUsername;
+  try {
+    const res  = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getMe`);
+    const data = await res.json();
+    if (data?.ok && data.result?.username) {
+      cachedBotUsername = data.result.username;
+    }
+  } catch {
+    // rede falhou; tentaremos de novo na proxima mensagem
+  }
+  return cachedBotUsername;
 }
 
 // Gerenciamento de acesso (Cloudflare KV)
