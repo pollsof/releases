@@ -36,8 +36,9 @@ jobs:
         run: |
           if [ -z "$CF_TOKEN" ]; then
             echo "::error::Secret CLOUDFLARE_API_TOKEN nao configurado."
-            echo "Crie um token em https://dash.cloudflare.com/profile/api-tokens com permissao 'Edit Cloudflare Workers'."
-            echo "Depois adicione em Settings > Secrets and variables > Actions > New repository secret."
+            echo "Opcao A (mais facil): em https://dash.cloudflare.com/profile/api-tokens use o template 'Edit Cloudflare Workers'."
+            echo "Opcao B (token customizado): Account > Workers Scripts > Edit (+ Workers KV Storage > Edit se usar /acesso)."
+            echo "Depois adicione o token em Settings > Secrets and variables > Actions > New repository secret."
             exit 1
           fi
           if [ -z "$CF_ACCOUNT" ]; then
