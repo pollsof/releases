@@ -30,7 +30,7 @@ jobs:
           COMMIT_MSG: ${{ steps.commit.outputs.result }}
           DEPLOY_URL: https://releases.pollaris.com.br
         run: |
-          TEXT=$(printf '✅ GitHub Pages atualizado!\n\n📝 %s\n🔗 %s' "$COMMIT_MSG" "$DEPLOY_URL")
+          TEXT=$(printf 'GitHub Pages atualizado.\n\nCommit: %s\nURL: %s' "$COMMIT_MSG" "$DEPLOY_URL")
           jq -n --arg chat_id "$TELEGRAM_CHAT_ID" --arg text "$TEXT" \
             '{chat_id: $chat_id, text: $text}' \
           | curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
