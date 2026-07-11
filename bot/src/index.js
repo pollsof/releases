@@ -20,6 +20,8 @@
  *   /usuarios                             -> lista todos os usuarios autorizados
  */
 
+const BOT_VERSION = '2.1.0';
+
 export default {
   async fetch(request, env) {
     if (request.method !== 'POST') return new Response('OK', { status: 200 });
@@ -45,9 +47,11 @@ export default {
       return new Response('OK', { status: 200 });
     }
 
-    const text = botMention
-      ? rawText.replace(new RegExp(escapeRegex(botMention), 'gi'), '').trim()
-      : rawText;
+    const text = normalizeCommandText(
+      botMention
+        ? rawText.replace(new RegExp(escapeRegex(botMention), 'gi'), '').trim()
+        : rawText
+    );
 
     const isRoot       = env.ROOT_ID && userId === String(env.ROOT_ID);
     const authorized   = isRoot || await isAuthorized(env, userId);
@@ -59,24 +63,24 @@ export default {
     const reply = (msg, md = false, keyboard = null) =>
       sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, msg, md, keyboard);
 
-    if (/^\/(start|menu)/i.test(text)) {
+    if (/^\/(start|menu)(?:@\S+)?/i.test(text)) {
       await reply(buildMenuText(authorized, isRoot), true, mainMenuKeyboard(env, authorized, isRoot));
       return new Response('OK', { status: 200 });
     }
 
-    if (/^\/myid/i.test(text)) {
+    if (/^\/myid(?:@\S+)?/i.test(text)) {
       await reply(`Seu ID: \`${userId}\``, true, mainMenuKeyboard(env, authorized, isRoot));
       return new Response('OK', { status: 200 });
     }
 
-    if (/^\/ajuda/i.test(text)) {
+    if (/^\/ajuda(?:@\S+)?/i.test(text)) {
       await reply(buildHelpText(isRoot), true, mainMenuKeyboard(env, authorized, isRoot));
       return new Response('OK', { status: 200 });
     }
 
     if (!authorized) return new Response('OK', { status: 200 });
 
-    const matchAcesso = text.match(/^\/acesso\s+(\d+)/i);
+    const matchAcesso = text.match(/^\/acesso(?:@\S+)?\s+(\d+)/i);
     if (matchAcesso) {
       if (!isRoot) return new Response('OK', { status: 200 });
       await addUser(env, matchAcesso[1]);
@@ -84,7 +88,7 @@ export default {
       return new Response('OK', { status: 200 });
     }
 
-    const matchRevogar = text.match(/^\/revogar\s+(\d+)/i);
+    const matchRevogar = text.match(/^\/revogar(?:@\S+)?\s+(\d+)/i);
     if (matchRevogar) {
       if (!isRoot) return new Response('OK', { status: 200 });
       await removeUser(env, matchRevogar[1]);
@@ -92,30 +96,30 @@ export default {
       return new Response('OK', { status: 200 });
     }
 
-    if (/^\/usuarios/i.test(text)) {
+    if (/^\/usuarios(?:@\S+)?/i.test(text)) {
       if (!isRoot) return new Response('OK', { status: 200 });
       await reply(await buildUsersText(env), true);
       return new Response('OK', { status: 200 });
     }
 
-    if (/^\/produtos/i.test(text)) {
+    if (/^\/produtos(?:@\S+)?/i.test(text)) {
       await reply(buildProductsText(env), true, productMenuKeyboard(env, 'cmd:menu'));
       return new Response('OK', { status: 200 });
     }
 
-    const matchVersao = text.match(/^\/versao\s+(\S+)/i);
+    const matchVersao = text.match(/^\/versao(?:@\S+)?\s+(\S+)/i);
     if (matchVersao) {
       await handleVersao(ctx, matchVersao[1].toLowerCase(), reply);
       return new Response('OK', { status: 200 });
     }
 
-    const matchRemover = text.match(/^\/remover\s+(\S+)\s+(\S+)/i);
+    const matchRemover = text.match(/^\/remover(?:@\S+)?\s+(\S+)\s+(\S+)/i);
     if (matchRemover) {
       await handleRemover(ctx, matchRemover[1].toLowerCase(), matchRemover[2], reply);
       return new Response('OK', { status: 200 });
     }
 
-    const matchLiberar = text.match(/^\/liberar\s+(\S+)(?:\s+(\S+))?(?:\s+(\S+))?/i);
+    const matchLiberar = text.match(/^\/liberar(?:@\S+)?\s+(\S+)(?:\s+(\S+))?(?:\s+(\S+))?/i);
     if (matchLiberar) {
       await handleLiberar(ctx, matchLiberar[1].toLowerCase(), matchLiberar[2], matchLiberar[3], reply);
       return new Response('OK', { status: 200 });
@@ -237,6 +241,7 @@ async function handleCallback(callback, env) {
 function buildMenuText(authorized, isRoot) {
   const lines = [
     '*Pollaris Release Bot*',
+    `_v${BOT_VERSION}_`,
     '',
     'Use os botoes abaixo ou os comandos em `/ajuda`.',
   ];
@@ -251,7 +256,7 @@ function buildMenuText(authorized, isRoot) {
 
 function buildHelpText(isRoot) {
   const lines = [
-    '*Comandos disponiveis:*',
+    `*Comandos disponiveis* (_bot v${BOT_VERSION}_):`,
     '',
     '`/myid` - seu ID do Telegram',
     '`/ajuda` - esta mensagem',
@@ -404,6 +409,11 @@ async function handleLiberar(ctx, sistema, arg2, arg3, send) {
       return;
     }
 
+    if (arg3 && arg2 && isPrVersion(arg2)) {
+      await send(assertReleaseBlockedMessage(), true);
+      return;
+    }
+
     const destPath = `${sistema}/${alvo}.json`;
     let contentB64;
 
@@ -487,6 +497,10 @@ function assertReleaseBlockedMessage() {
 function assertReleaseAllowed(manifest) {
   if (isPrManifest(manifest)) return assertReleaseBlockedMessage();
   return null;
+}
+
+function normalizeCommandText(text) {
+  return String(text ?? '').replace(/^(\/\w+)@\S+/i, '$1').trim();
 }
 
 // Gerenciamento de acesso (Cloudflare KV)
