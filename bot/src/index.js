@@ -20,7 +20,7 @@
  *   /usuarios                             -> lista todos os usuarios autorizados
  */
 
-const BOT_VERSION = '2.3.2';
+const BOT_VERSION = '2.3.3';
 
 export default {
   async fetch(request, env) {
@@ -396,7 +396,7 @@ async function handleVersao(ctx, produtoRaw, send) {
 async function handleRemover(ctx, produtoRaw, cnpjRaw, send) {
   const { owner, repo } = githubRepo(ctx.env);
   if (!owner || !repo) {
-    await send('Erro: REPO_OWNER/REPO_NAME nao configurados no worker.', true);
+    await send('Erro: variaveis REPO\\_OWNER e REPO\\_NAME nao configuradas no worker.', true);
     return;
   }
 

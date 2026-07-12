@@ -2,6 +2,12 @@ name = "pollaris-bot"
 main = "src/index.js"
 compatibility_date = "2024-09-01"
 
+[vars]
+REPO_OWNER = "pollsof"
+REPO_NAME = "releases"
+VALID_PRODUCTS = "green,snack"
+BOT_USERNAME = "PollarisReleasesBot"
+
 # Preencha o id do namespace KV ja usado pelo worker em producao.
 # Liste com: wrangler kv namespace list
 # [[kv_namespaces]]
@@ -9,5 +15,4 @@ compatibility_date = "2024-09-01"
 # id = "SEU_KV_NAMESPACE_ID"
 
 # Secrets (nao commitar): wrangler secret put TELEGRAM_BOT_TOKEN
-#   TELEGRAM_BOT_TOKEN, GITHUB_TOKEN, ROOT_ID, ALLOWED_USERS,
-#   VALID_PRODUCTS, REPO_OWNER, REPO_NAME, BOT_USERNAME
+#   TELEGRAM_BOT_TOKEN, GITHUB_TOKEN, ROOT_ID, ALLOWED_USERS
