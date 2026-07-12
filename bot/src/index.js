@@ -20,7 +20,7 @@
  *   /usuarios                             -> lista todos os usuarios autorizados
  */
 
-const BOT_VERSION = '2.3.1';
+const BOT_VERSION = '2.3.2';
 
 export default {
   async fetch(request, env) {
@@ -115,19 +115,19 @@ export default {
 
       const matchVersao = text.match(/^\/versao(?:@\S+)?\s+(\S+)/i);
       if (matchVersao) {
-        await handleVersao(ctx, matchVersao[1].toLowerCase(), reply);
+        await handleVersao(ctx, matchVersao[1], reply);
         return new Response('OK', { status: 200 });
       }
 
       const matchRemover = text.match(/^\/remover(?:@\S+)?\s+(\S+)\s+(\S+)/i);
       if (matchRemover) {
-        await handleRemover(ctx, matchRemover[1].toLowerCase(), matchRemover[2], reply);
+        await handleRemover(ctx, matchRemover[1], matchRemover[2], reply);
         return new Response('OK', { status: 200 });
       }
 
       const matchLiberar = text.match(/^\/liberar(?:@\S+)?\s+(\S+)(?:\s+(\S+))?(?:\s+(\S+))?/i);
       if (matchLiberar) {
-        await handleLiberar(ctx, matchLiberar[1].toLowerCase(), matchLiberar[2], matchLiberar[3], reply);
+        await handleLiberar(ctx, matchLiberar[1], matchLiberar[2], matchLiberar[3], reply);
         return new Response('OK', { status: 200 });
       }
     }
@@ -214,9 +214,14 @@ async function handleCallback(callback, env) {
 
   const matchLiberarStaging = data.match(/^liberar_staging:(\S+)$/);
   if (matchLiberarStaging) {
-    const produto = matchLiberarStaging[1];
+    const produto = resolveProduct(ctx.env, matchLiberarStaging[1]);
+    if (!produto) {
+      await edit(`Erro: produto desconhecido: *${esc(matchLiberarStaging[1])}*`, true, mainMenuKeyboard(ctx.env, authorized, isRoot));
+      return;
+    }
+    const { owner, repo } = githubRepo(ctx.env);
     try {
-      const res = await ghGet(ctx.env.GITHUB_TOKEN, ctx.env.REPO_OWNER, ctx.env.REPO_NAME, `${produto}/teste.json`);
+      const res = await ghGet(ctx.env.GITHUB_TOKEN, owner, repo, `${produto}/teste.json`);
       if (!res.ok) {
         await edit(`Erro: staging de *${esc(produto)}* nao encontrado.`, true, mainMenuKeyboard(ctx.env, authorized, isRoot));
         return;
@@ -361,9 +366,17 @@ function confirmLiberarKeyboard(produto) {
   };
 }
 
-async function handleVersao(ctx, produto, send) {
+async function handleVersao(ctx, produtoRaw, send) {
+  const { owner, repo } = githubRepo(ctx.env);
+  const produto = resolveProduct(ctx.env, produtoRaw);
+  if (!produto) {
+    const valid = splitEnv(ctx.env.VALID_PRODUCTS).join(', ') || '(nenhum)';
+    await send(`Erro: produto desconhecido: *${esc(produtoRaw)}*\nProdutos validos: ${valid}`, true);
+    return;
+  }
+
   try {
-    const res = await ghGet(ctx.env.GITHUB_TOKEN, ctx.env.REPO_OWNER, ctx.env.REPO_NAME, `${produto}/teste.json`);
+    const res = await ghGet(ctx.env.GITHUB_TOKEN, owner, repo, `${produto}/teste.json`);
     if (res.status === 404) {
       await send(`Erro: produto *${esc(produto)}* nao encontrado.`, true, mainMenuKeyboard(ctx.env, ctx.authorized, ctx.isRoot));
       return;
@@ -380,41 +393,60 @@ async function handleVersao(ctx, produto, send) {
   }
 }
 
-async function handleRemover(ctx, produto, cnpjRaw, send) {
-  const cnpj = normalizeDigits(cnpjRaw);
+async function handleRemover(ctx, produtoRaw, cnpjRaw, send) {
+  const { owner, repo } = githubRepo(ctx.env);
+  if (!owner || !repo) {
+    await send('Erro: REPO_OWNER/REPO_NAME nao configurados no worker.', true);
+    return;
+  }
 
+  const produto = resolveProduct(ctx.env, produtoRaw);
+  if (!produto) {
+    const valid = splitEnv(ctx.env.VALID_PRODUCTS).join(', ') || '(nenhum)';
+    await send(`Erro: produto desconhecido: *${esc(produtoRaw)}*\nProdutos validos: ${valid}`, true);
+    return;
+  }
+
+  const cnpj = normalizeDigits(cnpjRaw);
   if (!cnpj) {
     await send(`Erro: CPF/CNPJ invalido: *${esc(cnpjRaw)}*`, true);
     return;
   }
 
-  const path = `${produto}/${cnpj}.json`;
   try {
-    const res = await ghGet(ctx.env.GITHUB_TOKEN, ctx.env.REPO_OWNER, ctx.env.REPO_NAME, path);
-    if (res.status === 404) {
-      await send(`Erro: arquivo *${esc(path)}* nao existe.`, true);
+    const found = await findGithubFile(ctx.env.GITHUB_TOKEN, owner, repo, produto, cnpj);
+    if (!found.res?.ok) {
+      const status = found.res?.status ?? 'sem resposta';
+      await send(
+        `Erro: arquivo *${esc(found.path)}* nao encontrado em \`${owner}/${repo}\` (HTTP ${status}).`,
+        true
+      );
       return;
     }
-    const { sha } = await res.json();
+
+    const { sha } = await found.res.json();
     const delRes = await ghDelete(
-      ctx.env.GITHUB_TOKEN, ctx.env.REPO_OWNER, ctx.env.REPO_NAME, path, sha,
-      `chore: remove ${path} via Telegram (${ctx.username})`
+      ctx.env.GITHUB_TOKEN, owner, repo, found.path, sha,
+      `chore: remove ${found.path} via Telegram (${ctx.username})`
     );
     if (!delRes.ok) {
-      await send(`Erro: falha ao remover (${delRes.status}).`);
+      const body = await delRes.text();
+      await send(`Erro: falha ao remover (${delRes.status}):\n${body.slice(0, 300)}`);
     } else {
-      await send(`*${esc(path)}* removido com sucesso.`, true);
+      await send(`*${esc(found.path)}* removido com sucesso.`, true);
     }
   } catch (err) {
     await send(`Erro: ${err.message}`);
   }
 }
 
-async function handleLiberar(ctx, sistema, arg2, arg3, send) {
-  const validProducts = splitEnv(ctx.env.VALID_PRODUCTS);
-  if (validProducts.length > 0 && !validProducts.includes(sistema)) {
+async function handleLiberar(ctx, sistemaRaw, arg2, arg3, send) {
+  const { owner, repo } = githubRepo(ctx.env);
+  const sistema = resolveProduct(ctx.env, sistemaRaw);
+  if (!sistema) {
+    const valid = splitEnv(ctx.env.VALID_PRODUCTS).join(', ') || '(nenhum)';
     await send(
-      `Erro: produto desconhecido: *${esc(sistema)}*\nProdutos validos: ${validProducts.join(', ')}`,
+      `Erro: produto desconhecido: *${esc(sistemaRaw)}*\nProdutos validos: ${valid}`,
       true
     );
     return;
@@ -445,19 +477,19 @@ async function handleLiberar(ctx, sistema, arg2, arg3, send) {
       }
 
       const manifestPath = `${sistema}/${versao}.json`;
-      const srcRes = await ghGet(ctx.env.GITHUB_TOKEN, ctx.env.REPO_OWNER, ctx.env.REPO_NAME, manifestPath);
+      const srcRes = await ghGet(ctx.env.GITHUB_TOKEN, owner, repo, manifestPath);
 
       if (srcRes.ok) {
         contentB64 = (await srcRes.json()).content;
       } else {
         const vUnder = versao.replace(/\./g, '_');
-        const url    = `https://github.com/${ctx.env.REPO_OWNER}/${ctx.env.REPO_NAME}/releases/download/${sistema}-v${versao}/pollaris.${sistema}_${vUnder}.zip`;
+        const url    = `https://github.com/${owner}/${repo}/releases/download/${sistema}-v${versao}/pollaris.${sistema}_${vUnder}.zip`;
         const json   = JSON.stringify({ versao, url, obrigatorio: true });
         contentB64   = btoa(json);
       }
     } else {
       const srcPath = `${sistema}/teste.json`;
-      const srcRes  = await ghGet(ctx.env.GITHUB_TOKEN, ctx.env.REPO_OWNER, ctx.env.REPO_NAME, srcPath);
+      const srcRes  = await ghGet(ctx.env.GITHUB_TOKEN, owner, repo, srcPath);
       if (srcRes.status === 404) {
         await send(`Erro: arquivo *${esc(srcPath)}* nao encontrado.`, true);
         return;
@@ -476,11 +508,11 @@ async function handleLiberar(ctx, sistema, arg2, arg3, send) {
       return;
     }
 
-    const destRes = await ghGet(ctx.env.GITHUB_TOKEN, ctx.env.REPO_OWNER, ctx.env.REPO_NAME, destPath);
+    const destRes = await ghGet(ctx.env.GITHUB_TOKEN, owner, repo, destPath);
     const destSha = destRes.ok ? (await destRes.json()).sha : undefined;
 
     const putRes = await ghPut(
-      ctx.env.GITHUB_TOKEN, ctx.env.REPO_OWNER, ctx.env.REPO_NAME, destPath, contentB64,
+      ctx.env.GITHUB_TOKEN, owner, repo, destPath, contentB64,
       `release: ${sistema}/${alvo} via Telegram (${ctx.username})`,
       destSha
     );
@@ -586,9 +618,62 @@ function ghHeaders(token) {
   };
 }
 
+function trimEnv(value) {
+  return String(value ?? '').trim();
+}
+
+function githubRepo(env) {
+  return {
+    owner: trimEnv(env.REPO_OWNER),
+    repo:  trimEnv(env.REPO_NAME),
+  };
+}
+
+function resolveProduct(env, input) {
+  const raw = trimEnv(input);
+  if (!raw) return null;
+  const products = splitEnv(env.VALID_PRODUCTS);
+  if (!products.length) return raw.toLowerCase();
+  const match = products.find(p => p.toLowerCase() === raw.toLowerCase());
+  return match ? match.toLowerCase() : null;
+}
+
+function ghEncodePath(path) {
+  return String(path)
+    .split('/')
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join('/');
+}
+
+async function findGithubFile(token, owner, repo, produto, cnpj) {
+  const directPath = `${produto}/${cnpj}.json`;
+  let res = await ghGet(token, owner, repo, directPath);
+  if (res.ok) return { path: directPath, res };
+
+  const listRes = await ghGet(token, owner, repo, produto);
+  if (listRes.ok) {
+    const items = await listRes.json();
+    if (Array.isArray(items)) {
+      const hit = items.find(item =>
+        item.type === 'file' &&
+        item.name.toLowerCase().endsWith('.json') &&
+        normalizeDigits(item.name.replace(/\.json$/i, '')) === cnpj
+      );
+      if (hit) {
+        const path = `${produto}/${hit.name}`;
+        res = await ghGet(token, owner, repo, path);
+        if (res.ok) return { path, res };
+      }
+    }
+  }
+
+  return { path: directPath, res };
+}
+
 function ghGet(token, owner, repo, path) {
   return fetch(
-    `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`,
+    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${ghEncodePath(path)}`,
     { headers: ghHeaders(token) }
   );
 }
@@ -597,7 +682,7 @@ function ghPut(token, owner, repo, path, contentBase64, message, sha) {
   const body = { message, content: contentBase64 };
   if (sha) body.sha = sha;
   return fetch(
-    `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`,
+    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${ghEncodePath(path)}`,
     {
       method:  'PUT',
       headers: { ...ghHeaders(token), 'Content-Type': 'application/json' },
@@ -608,7 +693,7 @@ function ghPut(token, owner, repo, path, contentBase64, message, sha) {
 
 function ghDelete(token, owner, repo, path, sha, message) {
   return fetch(
-    `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`,
+    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${ghEncodePath(path)}`,
     {
       method:  'DELETE',
       headers: { ...ghHeaders(token), 'Content-Type': 'application/json' },
