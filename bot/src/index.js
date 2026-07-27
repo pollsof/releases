@@ -232,6 +232,11 @@ async function handleCallback(callback, env) {
         await edit(blocked, true, mainMenuKeyboard(ctx.env, authorized, isRoot));
         return;
       }
+      const missing = await assertReleaseExists(ctx.env.GITHUB_TOKEN, owner, repo, produto, content);
+      if (missing) {
+        await edit(missing, true, mainMenuKeyboard(ctx.env, authorized, isRoot));
+        return;
+      }
       await edit(
         `Confirmar liberacao de *${esc(produto)}*?\n\nVersao: \`${content.versao ?? 'desconhecida'}\`\nDestino: \`${esc(produto)}/${esc(produto)}.json\``,
         true,
@@ -508,6 +513,12 @@ async function handleLiberar(ctx, sistemaRaw, arg2, arg3, send) {
       return;
     }
 
+    const missing = await assertReleaseExists(ctx.env.GITHUB_TOKEN, owner, repo, sistema, manifest);
+    if (missing) {
+      await send(missing, true);
+      return;
+    }
+
     const destRes = await ghGet(ctx.env.GITHUB_TOKEN, owner, repo, destPath);
     const destSha = destRes.ok ? (await destRes.json()).sha : undefined;
 
@@ -522,7 +533,11 @@ async function handleLiberar(ctx, sistemaRaw, arg2, arg3, send) {
       await send(`Erro: falha no commit (${putRes.status}):\n${body}`);
     } else {
       const acao = destSha ? 'atualizado' : 'criado';
-      await send(`*${esc(destPath)}* ${acao} com sucesso.`, true, mainMenuKeyboard(ctx.env, ctx.authorized, ctx.isRoot));
+      await send(
+        buildLiberarSuccessMessage(sistema, manifest, alvo, destPath, acao),
+        true,
+        mainMenuKeyboard(ctx.env, ctx.authorized, ctx.isRoot)
+      );
     }
   } catch (err) {
     await send(`Erro interno: ${err.message}`);
@@ -548,6 +563,43 @@ function assertReleaseBlockedMessage() {
 function assertReleaseAllowed(manifest) {
   if (isPrManifest(manifest)) return assertReleaseBlockedMessage();
   return null;
+}
+
+function buildLiberarSuccessMessage(sistema, manifest, alvo, destPath, acao) {
+  const versao = manifest?.versao ?? 'desconhecida';
+  const isCnpj = alvo !== sistema;
+  const lines = [
+    `*${esc(sistema)}* liberado com sucesso!`,
+    '',
+    `Versao: \`${esc(versao)}\``,
+  ];
+  if (isCnpj) {
+    lines.push(`Destino: cliente \`${esc(alvo)}\``);
+    lines.push(`Arquivo: \`${esc(destPath)}\``);
+  } else {
+    lines.push(`Destino: producao (\`${esc(destPath)}\`)`);
+  }
+  lines.push(`Acao: ${acao}`);
+  return lines.join('\n');
+}
+
+function releaseTagFromManifest(sistema, manifest) {
+  const url = String(manifest?.url ?? '');
+  const match = url.match(/\/releases\/download\/([^/]+)\//);
+  if (match) return match[1];
+  const versao = manifest?.versao;
+  return versao ? `${sistema}-v${versao}` : null;
+}
+
+async function assertReleaseExists(token, owner, repo, sistema, manifest) {
+  const tag = releaseTagFromManifest(sistema, manifest);
+  if (!tag) return 'Erro: manifest sem versao ou URL valida.';
+  const res = await ghGetRelease(token, owner, repo, tag);
+  if (res.ok) return null;
+  if (res.status === 404) {
+    return `Erro: release *${esc(tag)}* nao encontrada no GitHub.\nVerifique se o build foi concluido antes de liberar.`;
+  }
+  return `Erro ao consultar release (${res.status}). Tente novamente.`;
 }
 
 function normalizeCommandText(text) {
@@ -699,6 +751,13 @@ function ghDelete(token, owner, repo, path, sha, message) {
       headers: { ...ghHeaders(token), 'Content-Type': 'application/json' },
       body:    JSON.stringify({ message, sha }),
     }
+  );
+}
+
+function ghGetRelease(token, owner, repo, tag) {
+  return fetch(
+    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/tags/${encodeURIComponent(tag)}`,
+    { headers: ghHeaders(token) }
   );
 }
 
