@@ -5,22 +5,26 @@
  *   /myid                                -> retorna seu ID do Telegram
  *   /ajuda                               -> lista todos os comandos
  *
- * Usuarios autorizados:
+ * Perfil usuario:
  *   /liberar {sistema}                    -> copia {sistema}/teste.json -> {sistema}/{sistema}.json
  *   /liberar {sistema} {versao}           -> gera {sistema}/{sistema}.json com a versao informada
  *   /liberar {sistema} {versao} {cnpj}    -> gera {sistema}/{cnpj}.json com a versao informada
- *                                         (consulta {sistema}/{versao}.json se existir; senao template {sistema}-v{versao})
  *   /remover {sistema} {cnpj}             -> remove {sistema}/{cnpj}.json do repositorio
  *   /versao  {sistema}                    -> exibe conteudo atual de {sistema}/teste.json
  *   /produtos                             -> lista os produtos disponiveis
  *
- * Root (administrador raiz):
- *   /acesso  {userid}                     -> concede acesso a um usuario
- *   /revogar {userid}                     -> revoga acesso de um usuario
- *   /usuarios                             -> lista todos os usuarios autorizados
+ * Perfil root:
+ *   /user {id} {perfil}                   -> cria ou atualiza usuario (root|usuario)
+ *   /user {id} remover                    -> remove acesso
+ *   /usuarios                             -> lista usuarios e perfis
+ *   /mesclar {produto} {numero}           -> mescla PR no repositorio de codigo do produto
  */
 
-const BOT_VERSION = '2.3.3';
+const BOT_VERSION = '2.4.0';
+
+const VALID_PROFILES = ['root', 'usuario'];
+const KV_USERS_KEY = 'bot_users';
+const KV_LEGACY_KEY = 'allowed_users';
 
 export default {
   async fetch(request, env) {
@@ -60,51 +64,62 @@ export default {
         : rawText
     );
 
-    const isRoot       = env.ROOT_ID && userId === String(env.ROOT_ID);
-    const authorized   = isRoot || await isAuthorized(env, userId);
-    const username     = message.from?.username
+    const profile  = await getUserProfile(env, userId);
+    const username = message.from?.username
       ? `@${message.from.username}`
       : (message.from?.first_name ?? `user ${userId}`);
-    const ctx          = { env, chatId, userId, username, isRoot, authorized };
+    const ctx      = buildCtx(env, chatId, userId, username, profile);
 
     const reply = (msg, md = false, keyboard = null) =>
       sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, msg, md, keyboard);
 
     if (/^\/(start|menu)(?:@\S+)?/i.test(text)) {
-      await reply(buildMenuText(authorized, isRoot), true, mainMenuKeyboard(env, authorized, isRoot));
+      await reply(buildMenuText(ctx), true, mainMenuKeyboard(env, ctx));
       return new Response('OK', { status: 200 });
     }
 
     if (/^\/myid(?:@\S+)?/i.test(text)) {
-      await reply(`Seu ID: \`${userId}\``, true, mainMenuKeyboard(env, authorized, isRoot));
+      await reply(`Seu ID: \`${userId}\``, true, mainMenuKeyboard(env, ctx));
       return new Response('OK', { status: 200 });
     }
 
     if (/^\/ajuda(?:@\S+)?/i.test(text)) {
-      await reply(buildHelpText(isRoot), true, mainMenuKeyboard(env, authorized, isRoot));
+      await reply(buildHelpText(ctx), true, mainMenuKeyboard(env, ctx));
       return new Response('OK', { status: 200 });
     }
 
-    if (authorized) {
+    if (ctx.authorized) {
+      const matchUser = text.match(/^\/user(?:@\S+)?\s+(\d+)\s+(\S+)/i);
+      if (matchUser) {
+        if (!ctx.isRoot) return new Response('OK', { status: 200 });
+        await handleUser(ctx, matchUser[1], matchUser[2], reply);
+        return new Response('OK', { status: 200 });
+      }
+
       const matchAcesso = text.match(/^\/acesso(?:@\S+)?\s+(\d+)/i);
       if (matchAcesso) {
-        if (!isRoot) return new Response('OK', { status: 200 });
-        await addUser(env, matchAcesso[1]);
-        await reply(`Acesso concedido para ID \`${matchAcesso[1]}\`.`, true);
+        if (!ctx.isRoot) return new Response('OK', { status: 200 });
+        await reply('Comando descontinuado. Use `/user {id} usuario`.', true);
         return new Response('OK', { status: 200 });
       }
 
       const matchRevogar = text.match(/^\/revogar(?:@\S+)?\s+(\d+)/i);
       if (matchRevogar) {
-        if (!isRoot) return new Response('OK', { status: 200 });
-        await removeUser(env, matchRevogar[1]);
-        await reply(`Acesso revogado para ID \`${matchRevogar[1]}\`.`, true);
+        if (!ctx.isRoot) return new Response('OK', { status: 200 });
+        await reply('Comando descontinuado. Use `/user {id} remover`.', true);
         return new Response('OK', { status: 200 });
       }
 
       if (/^\/usuarios(?:@\S+)?/i.test(text)) {
-        if (!isRoot) return new Response('OK', { status: 200 });
+        if (!ctx.isRoot) return new Response('OK', { status: 200 });
         await reply(await buildUsersText(env), true);
+        return new Response('OK', { status: 200 });
+      }
+
+      const matchMesclar = text.match(/^\/mesclar(?:@\S+)?\s+(\S+)\s+(\d+)/i);
+      if (matchMesclar) {
+        if (!ctx.isRoot) return new Response('OK', { status: 200 });
+        await handleMesclarPrepare(ctx, matchMesclar[1], Number(matchMesclar[2]), reply);
         return new Response('OK', { status: 200 });
       }
 
@@ -132,22 +147,29 @@ export default {
       }
     }
 
-    await reply(
-      buildFallbackText(authorized, isRoot),
-      true,
-      mainMenuKeyboard(env, authorized, isRoot)
-    );
+    await reply(buildFallbackText(ctx), true, mainMenuKeyboard(env, ctx));
     return new Response('OK', { status: 200 });
   }
 };
 
+function buildCtx(env, chatId, userId, username, profile) {
+  return {
+    env,
+    chatId,
+    userId,
+    username,
+    profile,
+    isRoot: profileIsRoot(profile),
+    authorized: profileIsAuthorized(profile),
+  };
+}
+
 async function handleCallback(callback, env) {
-  const data     = callback.data ?? '';
-  const chatId   = callback.message?.chat?.id;
+  const data      = callback.data ?? '';
+  const chatId    = callback.message?.chat?.id;
   const messageId = callback.message?.message_id;
-  const userId   = String(callback.from?.id ?? '');
-  const isRoot   = env.ROOT_ID && userId === String(env.ROOT_ID);
-  const authorized = isRoot || await isAuthorized(env, userId);
+  const userId    = String(callback.from?.id ?? '');
+  const profile   = await getUserProfile(env, userId);
 
   await answerCallbackQuery(env.TELEGRAM_BOT_TOKEN, callback.id);
 
@@ -156,30 +178,27 @@ async function handleCallback(callback, env) {
   const username = callback.from?.username
     ? `@${callback.from.username}`
     : (callback.from?.first_name ?? `user ${userId}`);
-  const ctx = { env, chatId, userId, username, isRoot, authorized };
+  const ctx = buildCtx(env, chatId, userId, username, profile);
 
   const edit = (msg, md = false, keyboard = null) =>
     editMessage(env.TELEGRAM_BOT_TOKEN, chatId, messageId, msg, md, keyboard);
 
-  const reply = (msg, md = false, keyboard = null) =>
-    sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, msg, md, keyboard);
-
   if (data === 'cmd:menu') {
-    await edit(buildMenuText(authorized, isRoot), true, mainMenuKeyboard(env, authorized, isRoot));
+    await edit(buildMenuText(ctx), true, mainMenuKeyboard(env, ctx));
     return;
   }
 
   if (data === 'cmd:myid') {
-    await edit(`Seu ID: \`${userId}\``, true, mainMenuKeyboard(env, authorized, isRoot));
+    await edit(`Seu ID: \`${userId}\``, true, mainMenuKeyboard(env, ctx));
     return;
   }
 
   if (data === 'cmd:ajuda') {
-    await edit(buildHelpText(isRoot), true, mainMenuKeyboard(env, authorized, isRoot));
+    await edit(buildHelpText(ctx), true, mainMenuKeyboard(env, ctx));
     return;
   }
 
-  if (!authorized) return;
+  if (!ctx.authorized) return;
 
   if (data === 'cmd:produtos') {
     await edit(buildProductsText(env), true, productMenuKeyboard(env, 'cmd:menu'));
@@ -187,8 +206,8 @@ async function handleCallback(callback, env) {
   }
 
   if (data === 'cmd:usuarios') {
-    if (!isRoot) return;
-    await edit(await buildUsersText(env), true, mainMenuKeyboard(env, authorized, isRoot));
+    if (!ctx.isRoot) return;
+    await edit(await buildUsersText(env), true, mainMenuKeyboard(env, ctx));
     return;
   }
 
@@ -206,6 +225,16 @@ async function handleCallback(callback, env) {
     return;
   }
 
+  if (data === 'cmd:mesclar_menu') {
+    if (!ctx.isRoot) return;
+    await edit(
+      'Selecione o produto para mesclar uma PR:',
+      true,
+      productMenuKeyboard(env, 'mesclar_pick', 'cmd:menu')
+    );
+    return;
+  }
+
   const matchVersao = data.match(/^versao:(\S+)$/);
   if (matchVersao) {
     await handleVersao(ctx, matchVersao[1], edit);
@@ -216,25 +245,25 @@ async function handleCallback(callback, env) {
   if (matchLiberarStaging) {
     const produto = resolveProduct(ctx.env, matchLiberarStaging[1]);
     if (!produto) {
-      await edit(`Erro: produto desconhecido: *${esc(matchLiberarStaging[1])}*`, true, mainMenuKeyboard(ctx.env, authorized, isRoot));
+      await edit(`Erro: produto desconhecido: *${esc(matchLiberarStaging[1])}*`, true, mainMenuKeyboard(env, ctx));
       return;
     }
     const { owner, repo } = githubRepo(ctx.env);
     try {
       const res = await ghGet(ctx.env.GITHUB_TOKEN, owner, repo, `${produto}/teste.json`);
       if (!res.ok) {
-        await edit(`Erro: staging de *${esc(produto)}* nao encontrado.`, true, mainMenuKeyboard(ctx.env, authorized, isRoot));
+        await edit(`Erro: staging de *${esc(produto)}* nao encontrado.`, true, mainMenuKeyboard(env, ctx));
         return;
       }
       const content = decodeGhContent((await res.json()).content);
       const blocked = assertReleaseAllowed(content);
       if (blocked) {
-        await edit(blocked, true, mainMenuKeyboard(ctx.env, authorized, isRoot));
+        await edit(blocked, true, mainMenuKeyboard(env, ctx));
         return;
       }
       const missing = await assertReleaseExists(ctx.env.GITHUB_TOKEN, owner, repo, produto, content);
       if (missing) {
-        await edit(missing, true, mainMenuKeyboard(ctx.env, authorized, isRoot));
+        await edit(missing, true, mainMenuKeyboard(env, ctx));
         return;
       }
       await edit(
@@ -243,7 +272,7 @@ async function handleCallback(callback, env) {
         confirmLiberarKeyboard(produto)
       );
     } catch (err) {
-      await edit(`Erro: ${err.message}`, false, mainMenuKeyboard(ctx.env, authorized, isRoot));
+      await edit(`Erro: ${err.message}`, false, mainMenuKeyboard(env, ctx));
     }
     return;
   }
@@ -255,28 +284,54 @@ async function handleCallback(callback, env) {
   }
 
   if (data === 'liberar_cancel') {
-    await edit('Liberacao cancelada.', false, mainMenuKeyboard(ctx.env, authorized, isRoot));
+    await edit('Liberacao cancelada.', false, mainMenuKeyboard(env, ctx));
+    return;
+  }
+
+  const matchMesclarPick = data.match(/^mesclar_pick:(\S+)$/);
+  if (matchMesclarPick) {
+    if (!ctx.isRoot) return;
+    await handleMesclarPick(ctx, matchMesclarPick[1], edit);
+    return;
+  }
+
+  const matchMesclarPrepare = data.match(/^mesclar_prepare:(\S+):(\d+)$/);
+  if (matchMesclarPrepare) {
+    if (!ctx.isRoot) return;
+    await handleMesclarPrepare(ctx, matchMesclarPrepare[1], Number(matchMesclarPrepare[2]), edit);
+    return;
+  }
+
+  const matchMesclarConfirm = data.match(/^mesclar_confirm:(\S+):(\d+)$/);
+  if (matchMesclarConfirm) {
+    if (!ctx.isRoot) return;
+    await handleMesclarExecute(ctx, matchMesclarConfirm[1], Number(matchMesclarConfirm[2]), edit);
+    return;
+  }
+
+  if (data === 'mesclar_cancel') {
+    await edit('Merge cancelado.', false, mainMenuKeyboard(env, ctx));
     return;
   }
 }
 
-function buildMenuText(authorized, isRoot) {
+function buildMenuText(ctx) {
   const lines = [
     '*Pollaris Release Bot*',
     `_v${BOT_VERSION}_`,
     '',
     'Use os botoes abaixo ou os comandos em `/ajuda`.',
   ];
-  if (authorized) {
+  if (ctx.authorized) {
     lines.push('', '_Voce tem acesso aos comandos de release._');
   }
-  if (isRoot) {
+  if (ctx.isRoot) {
     lines.push('_Voce e administrador root._');
   }
   return lines.join('\n');
 }
 
-function buildHelpText(isRoot) {
+function buildHelpText(ctx) {
   const lines = [
     `*Comandos disponiveis* (_bot v${BOT_VERSION}_):`,
     '',
@@ -292,17 +347,18 @@ function buildHelpText(isRoot) {
     '`/liberar {sistema} {versao} {cnpj}` - publica versao para CNPJ',
     '`/remover {sistema} {cnpj}` - remove arquivo do repositorio',
   ];
-  if (isRoot) {
+  if (ctx.isRoot) {
     lines.push('', '*Root:*');
-    lines.push('`/acesso {userid}` - concede acesso');
-    lines.push('`/revogar {userid}` - revoga acesso');
-    lines.push('`/usuarios` - lista usuarios autorizados');
+    lines.push('`/user {id} {perfil}` - cria ou atualiza (root|usuario)');
+    lines.push('`/user {id} remover` - remove acesso');
+    lines.push('`/usuarios` - lista usuarios e perfis');
+    lines.push('`/mesclar {produto} {numero}` - mescla PR no repo de codigo');
   }
   return lines.join('\n');
 }
 
-function buildFallbackText(authorized, isRoot) {
-  if (authorized) {
+function buildFallbackText(ctx) {
+  if (ctx.authorized) {
     return 'Nao entendi essa mensagem. Use `/ajuda` para ver os comandos ou os botoes abaixo.';
   }
   return 'Ola! Nao entendi essa mensagem. Use `/ajuda` para ver o que posso fazer ou `/myid` para obter seu ID.';
@@ -314,13 +370,13 @@ function buildProductsText(env) {
 }
 
 async function buildUsersText(env) {
-  const list = await listUsers(env);
-  return list.length
-    ? `*Usuarios autorizados (${list.length}):*\n` + list.map(id => `- \`${id}\``).join('\n')
-    : 'Nenhum usuario autorizado alem do root.';
+  const list = await listAllUsers(env);
+  if (!list.length) return 'Nenhum usuario cadastrado.';
+  const lines = list.map(({ id, profile }) => `- \`${id}\` (${profile})`);
+  return `*Usuarios (${list.length}):*\n` + lines.join('\n');
 }
 
-function mainMenuKeyboard(env, authorized, isRoot) {
+function mainMenuKeyboard(env, ctx) {
   const rows = [
     [
       { text: 'Meu ID', callback_data: 'cmd:myid' },
@@ -328,7 +384,7 @@ function mainMenuKeyboard(env, authorized, isRoot) {
     ],
   ];
 
-  if (authorized) {
+  if (ctx.authorized) {
     rows.push([{ text: 'Produtos', callback_data: 'cmd:produtos' }]);
     rows.push([
       { text: 'Ver staging', callback_data: 'cmd:versao_menu' },
@@ -336,8 +392,11 @@ function mainMenuKeyboard(env, authorized, isRoot) {
     ]);
   }
 
-  if (isRoot) {
-    rows.push([{ text: 'Usuarios', callback_data: 'cmd:usuarios' }]);
+  if (ctx.isRoot) {
+    rows.push([
+      { text: 'Mesclar PR', callback_data: 'cmd:mesclar_menu' },
+      { text: 'Usuarios', callback_data: 'cmd:usuarios' },
+    ]);
   }
 
   return { inline_keyboard: rows };
@@ -371,6 +430,236 @@ function confirmLiberarKeyboard(produto) {
   };
 }
 
+function confirmMesclarKeyboard(produto, prNumber) {
+  return {
+    inline_keyboard: [
+      [
+        { text: 'Confirmar merge', callback_data: `mesclar_confirm:${produto}:${prNumber}` },
+        { text: 'Cancelar', callback_data: 'mesclar_cancel' },
+      ],
+    ],
+  };
+}
+
+function mesclarPrListKeyboard(produto, prs) {
+  const rows = [];
+  for (let i = 0; i < prs.length; i += 2) {
+    rows.push(
+      prs.slice(i, i + 2).map(pr => ({
+        text: `#${pr.number}`,
+        callback_data: `mesclar_prepare:${produto}:${pr.number}`,
+      }))
+    );
+  }
+  rows.push([{ text: 'Voltar', callback_data: 'cmd:mesclar_menu' }]);
+  return { inline_keyboard: rows };
+}
+
+async function handleUser(ctx, targetId, perfilRaw, send) {
+  const perfil = perfilRaw.toLowerCase();
+
+  if (isEnvRoot(ctx.env, targetId)) {
+    await send('Erro: o ROOT\\_ID do ambiente nao pode ser alterado pelo bot.', true);
+    return;
+  }
+
+  if (perfil === 'remover') {
+    const seed = splitEnv(ctx.env.ALLOWED_USERS);
+    if (seed.includes(targetId)) {
+      await send(
+        `Erro: ID \`${targetId}\` esta no ALLOWED\\_USERS do ambiente e nao pode ser removido pelo bot.`,
+        true
+      );
+      return;
+    }
+    const existing = await getUserProfile(ctx.env, targetId);
+    if (!existing) {
+      await send(`Usuario \`${targetId}\` nao encontrado.`, true);
+      return;
+    }
+    await removeBotUser(ctx.env, targetId);
+    await send(`Acesso removido para ID \`${targetId}\`.`, true);
+    return;
+  }
+
+  if (!VALID_PROFILES.includes(perfil)) {
+    await send(`Erro: perfil invalido. Use: ${VALID_PROFILES.join(', ')} ou remover.`, true);
+    return;
+  }
+
+  const existed = (await getUserProfile(ctx.env, targetId)) !== null;
+  await setUserProfile(ctx.env, targetId, perfil);
+  const acao = existed ? 'atualizado' : 'criado';
+  await send(`Usuario \`${targetId}\` ${acao} com perfil *${perfil}*.`, true);
+}
+
+async function handleMesclarPick(ctx, produtoRaw, send) {
+  const produto = resolveProduct(ctx.env, produtoRaw);
+  if (!produto) {
+    await send(`Erro: produto desconhecido: *${esc(produtoRaw)}*`, true, mainMenuKeyboard(ctx.env, ctx));
+    return;
+  }
+
+  const mergeRepo = resolveMergeRepo(ctx.env, produto);
+  if (!mergeRepo) {
+    await send(`Erro: MERGE\\_REPO\\_${esc(produto)} nao configurado.`, true, mainMenuKeyboard(ctx.env, ctx));
+    return;
+  }
+
+  const { owner, repo } = githubRepo(ctx.env);
+  try {
+    const res = await ghGet(ctx.env.GITHUB_TOKEN, owner, repo, `${produto}/pullrequests.json`);
+    if (!res.ok) {
+      await send(
+        `Use \`/mesclar ${esc(produto)} {numero}\` para mesclar uma PR em \`${mergeRepo.owner}/${mergeRepo.repo}\`.`,
+        true,
+        mainMenuKeyboard(ctx.env, ctx)
+      );
+      return;
+    }
+    const prs = JSON.parse(atob((await res.json()).content.replace(/\n/g, '')));
+    if (!Array.isArray(prs) || !prs.length) {
+      await send(
+        `Nenhuma PR listada em pullrequests.json. Use \`/mesclar ${esc(produto)} {numero}\`.`,
+        true,
+        mainMenuKeyboard(ctx.env, ctx)
+      );
+      return;
+    }
+    await send(
+      `PRs de *${esc(produto)}* (\`${mergeRepo.owner}/${mergeRepo.repo}\`). Selecione ou use \`/mesclar ${esc(produto)} {numero}\`:`,
+      true,
+      mesclarPrListKeyboard(produto, prs)
+    );
+  } catch (err) {
+    await send(`Erro: ${err.message}`, false, mainMenuKeyboard(ctx.env, ctx));
+  }
+}
+
+async function handleMesclarPrepare(ctx, produtoRaw, prNumber, send) {
+  if (!prNumber || prNumber < 1) {
+    await send('Erro: numero de PR invalido.', true);
+    return;
+  }
+
+  const produto = resolveProduct(ctx.env, produtoRaw);
+  if (!produto) {
+    const valid = splitEnv(ctx.env.VALID_PRODUCTS).join(', ') || '(nenhum)';
+    await send(`Erro: produto desconhecido: *${esc(produtoRaw)}*\nProdutos validos: ${valid}`, true);
+    return;
+  }
+
+  const mergeRepo = resolveMergeRepo(ctx.env, produto);
+  if (!mergeRepo) {
+    await send(`Erro: MERGE\\_REPO\\_${esc(produto)} nao configurado.`, true);
+    return;
+  }
+
+  const { owner, repo } = mergeRepo;
+
+  try {
+    const res = await ghGetPull(ctx.env.GITHUB_TOKEN, owner, repo, prNumber);
+    if (res.status === 404) {
+      await send(`Erro: PR #${prNumber} nao encontrada em \`${owner}/${repo}\`.`, true);
+      return;
+    }
+    if (!res.ok) {
+      const body = await res.text();
+      await send(`Erro ao consultar PR (${res.status}):\n${body.slice(0, 300)}`);
+      return;
+    }
+
+    const pr = await res.json();
+
+    if (pr.state !== 'open') {
+      await send(`Erro: PR #${prNumber} esta *${pr.state}* e nao pode ser mesclada.`, true);
+      return;
+    }
+
+    if (pr.mergeable === false || pr.mergeable_state === 'dirty') {
+      await send(
+        `Erro: PR #${prNumber} tem conflitos (mergeable\\_state: ${pr.mergeable_state ?? 'dirty'}).`,
+        true
+      );
+      return;
+    }
+
+    const blockedWarning = pr.mergeable_state === 'blocked'
+      ? '\n\n_Aviso: PR bloqueada (checks pendentes?)._'
+      : '';
+    const unknownWarning = pr.mergeable === null
+      ? '\n\n_Aviso: mergeability ainda sendo calculada pelo GitHub._'
+      : '';
+
+    await send(
+      `Confirmar merge da PR #${prNumber} em *${esc(owner)}/${esc(repo)}*?${blockedWarning}${unknownWarning}\n\n` +
+      `Titulo: ${esc(pr.title)}\n` +
+      `Base: \`${pr.base?.ref ?? '?'}\` <- \`${pr.head?.ref ?? '?'}\``,
+      true,
+      confirmMesclarKeyboard(produto, prNumber)
+    );
+  } catch (err) {
+    await send(`Erro: ${err.message}`);
+  }
+}
+
+async function handleMesclarExecute(ctx, produtoRaw, prNumber, send) {
+  const produto = resolveProduct(ctx.env, produtoRaw);
+  if (!produto) {
+    await send(`Erro: produto desconhecido: *${esc(produtoRaw)}*`, true);
+    return;
+  }
+
+  const mergeRepo = resolveMergeRepo(ctx.env, produto);
+  if (!mergeRepo) {
+    await send(`Erro: MERGE\\_REPO\\_${esc(produto)} nao configurado.`, true);
+    return;
+  }
+
+  const { owner, repo } = mergeRepo;
+  const mergeMethod = resolveMergeMethod(ctx.env);
+
+  try {
+    const checkRes = await ghGetPull(ctx.env.GITHUB_TOKEN, owner, repo, prNumber);
+    if (!checkRes.ok) {
+      await send(`Erro: nao foi possivel revalidar PR #${prNumber} (${checkRes.status}).`, true);
+      return;
+    }
+    const pr = await checkRes.json();
+    if (pr.state !== 'open') {
+      await send(`Erro: PR #${prNumber} nao esta mais aberta.`, true);
+      return;
+    }
+    if (pr.mergeable === false || pr.mergeable_state === 'dirty') {
+      await send(`Erro: PR #${prNumber} tem conflitos e nao pode ser mesclada.`, true);
+      return;
+    }
+
+    const res = await ghMergePull(ctx.env.GITHUB_TOKEN, owner, repo, prNumber, mergeMethod);
+    if (!res.ok) {
+      const body = await res.text();
+      let detail = body.slice(0, 400);
+      if (res.status === 403) {
+        detail += '\n\nVerifique se o GITHUB\\_TOKEN tem permissao pull\\_requests:write no repositorio.';
+      }
+      await send(`Erro ao mesclar PR #${prNumber} (${res.status}):\n${detail}`);
+      return;
+    }
+
+    const result = await res.json();
+    await send(
+      `PR #${prNumber} mesclada com sucesso em *${esc(owner)}/${esc(repo)}*!\n\n` +
+      `Titulo: ${esc(pr.title)}\n` +
+      `Metodo: \`${mergeMethod}\`\n` +
+      `SHA: \`${result.sha ?? 'n/a'}\``,
+      true,
+      mainMenuKeyboard(ctx.env, ctx)
+    );
+  } catch (err) {
+    await send(`Erro interno: ${err.message}`);
+  }
+}
+
 async function handleVersao(ctx, produtoRaw, send) {
   const { owner, repo } = githubRepo(ctx.env);
   const produto = resolveProduct(ctx.env, produtoRaw);
@@ -383,7 +672,7 @@ async function handleVersao(ctx, produtoRaw, send) {
   try {
     const res = await ghGet(ctx.env.GITHUB_TOKEN, owner, repo, `${produto}/teste.json`);
     if (res.status === 404) {
-      await send(`Erro: produto *${esc(produto)}* nao encontrado.`, true, mainMenuKeyboard(ctx.env, ctx.authorized, ctx.isRoot));
+      await send(`Erro: produto *${esc(produto)}* nao encontrado.`, true, mainMenuKeyboard(ctx.env, ctx));
       return;
     }
     const data    = await res.json();
@@ -536,7 +825,7 @@ async function handleLiberar(ctx, sistemaRaw, arg2, arg3, send) {
       await send(
         buildLiberarSuccessMessage(sistema, manifest, alvo, destPath, acao),
         true,
-        mainMenuKeyboard(ctx.env, ctx.authorized, ctx.isRoot)
+        mainMenuKeyboard(ctx.env, ctx)
       );
     }
   } catch (err) {
@@ -628,37 +917,95 @@ async function getBotUsername(env) {
 
 // Gerenciamento de acesso (Cloudflare KV)
 
-const KV_KEY = 'allowed_users';
-
-async function isAuthorized(env, userId) {
-  const seed = splitEnv(env.ALLOWED_USERS);
-  if (seed.includes(userId)) return true;
-  const stored = await env.POLLARIS_KV?.get(KV_KEY);
-  if (!stored) return false;
-  return JSON.parse(stored).includes(userId);
+function isEnvRoot(env, userId) {
+  return env.ROOT_ID && userId === String(env.ROOT_ID);
 }
 
-async function addUser(env, userId) {
-  const stored = await env.POLLARIS_KV?.get(KV_KEY);
-  const list   = stored ? JSON.parse(stored) : [];
-  if (!list.includes(userId)) {
-    list.push(userId);
-    await env.POLLARIS_KV?.put(KV_KEY, JSON.stringify(list));
+function profileIsRoot(profile) {
+  return profile === 'root';
+}
+
+function profileIsAuthorized(profile) {
+  return profile === 'root' || profile === 'usuario';
+}
+
+async function loadBotUsers(env) {
+  if (!env.POLLARIS_KV) return {};
+
+  const stored = await env.POLLARIS_KV.get(KV_USERS_KEY);
+  if (stored) return JSON.parse(stored);
+
+  const legacy = await env.POLLARIS_KV.get(KV_LEGACY_KEY);
+  const users = {};
+  if (legacy) {
+    const list = JSON.parse(legacy);
+    if (Array.isArray(list)) {
+      for (const id of list) {
+        users[String(id)] = 'usuario';
+      }
+      await env.POLLARIS_KV.put(KV_USERS_KEY, JSON.stringify(users));
+    }
+  }
+  return users;
+}
+
+async function getKvUserProfile(env, userId) {
+  const users = await loadBotUsers(env);
+  return users[userId] ?? null;
+}
+
+async function getUserProfile(env, userId) {
+  if (isEnvRoot(env, userId)) return 'root';
+  const kvProfile = await getKvUserProfile(env, userId);
+  if (kvProfile) return kvProfile;
+  const seed = splitEnv(env.ALLOWED_USERS);
+  if (seed.includes(userId)) return 'usuario';
+  return null;
+}
+
+async function setUserProfile(env, userId, profile) {
+  const users = await loadBotUsers(env);
+  users[String(userId)] = profile;
+  if (env.POLLARIS_KV) {
+    await env.POLLARIS_KV.put(KV_USERS_KEY, JSON.stringify(users));
   }
 }
 
-async function removeUser(env, userId) {
-  const stored = await env.POLLARIS_KV?.get(KV_KEY);
-  if (!stored) return;
-  const list = JSON.parse(stored).filter(id => id !== userId);
-  await env.POLLARIS_KV?.put(KV_KEY, JSON.stringify(list));
+async function removeBotUser(env, userId) {
+  const users = await loadBotUsers(env);
+  delete users[String(userId)];
+  if (env.POLLARIS_KV) {
+    await env.POLLARIS_KV.put(KV_USERS_KEY, JSON.stringify(users));
+  }
 }
 
-async function listUsers(env) {
-  const stored  = await env.POLLARIS_KV?.get(KV_KEY);
-  const dynamic = stored ? JSON.parse(stored) : [];
-  const seed    = splitEnv(env.ALLOWED_USERS);
-  return [...new Set([...seed, ...dynamic])];
+async function listAllUsers(env) {
+  const users = await loadBotUsers(env);
+  const seen = new Set();
+  const result = [];
+
+  if (env.ROOT_ID) {
+    const rootId = String(env.ROOT_ID);
+    result.push({ id: rootId, profile: 'root' });
+    seen.add(rootId);
+  }
+
+  for (const [id, profile] of Object.entries(users)) {
+    if (!seen.has(id)) {
+      result.push({ id, profile });
+      seen.add(id);
+    }
+  }
+
+  const seed = splitEnv(env.ALLOWED_USERS);
+  for (const id of seed) {
+    if (!seen.has(id)) {
+      result.push({ id, profile: 'usuario' });
+      seen.add(id);
+    }
+  }
+
+  return result;
 }
 
 function ghHeaders(token) {
@@ -679,6 +1026,20 @@ function githubRepo(env) {
     owner: trimEnv(env.REPO_OWNER),
     repo:  trimEnv(env.REPO_NAME),
   };
+}
+
+function resolveMergeRepo(env, produto) {
+  const value = trimEnv(env[`MERGE_REPO_${produto}`]);
+  if (!value) return null;
+  const parts = value.split('/').map(s => s.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  return { owner: parts[0], repo: parts[1] };
+}
+
+function resolveMergeMethod(env) {
+  const method = trimEnv(env.MERGE_METHOD).toLowerCase();
+  if (['merge', 'squash', 'rebase'].includes(method)) return method;
+  return 'merge';
 }
 
 function resolveProduct(env, input) {
@@ -758,6 +1119,24 @@ function ghGetRelease(token, owner, repo, tag) {
   return fetch(
     `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/tags/${encodeURIComponent(tag)}`,
     { headers: ghHeaders(token) }
+  );
+}
+
+function ghGetPull(token, owner, repo, number) {
+  return fetch(
+    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${number}`,
+    { headers: ghHeaders(token) }
+  );
+}
+
+function ghMergePull(token, owner, repo, number, mergeMethod) {
+  return fetch(
+    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${number}/merge`,
+    {
+      method:  'PUT',
+      headers: { ...ghHeaders(token), 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ merge_method: mergeMethod }),
+    }
   );
 }
 

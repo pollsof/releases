@@ -7,6 +7,9 @@ REPO_OWNER = "pollsof"
 REPO_NAME = "releases"
 VALID_PRODUCTS = "green,snack"
 BOT_USERNAME = "PollarisReleasesBot"
+MERGE_REPO_green = "pollsof/green"
+MERGE_REPO_snack = "pollsof/snack"
+MERGE_METHOD = "merge"
 
 # Preencha o id do namespace KV ja usado pelo worker em producao.
 # Liste com: wrangler kv namespace list
@@ -16,3 +19,4 @@ BOT_USERNAME = "PollarisReleasesBot"
 
 # Secrets (nao commitar): wrangler secret put TELEGRAM_BOT_TOKEN
 #   TELEGRAM_BOT_TOKEN, GITHUB_TOKEN, ROOT_ID, ALLOWED_USERS
+# GITHUB_TOKEN precisa de pull_requests:write nos repos MERGE_REPO_*
