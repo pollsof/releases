@@ -65,12 +65,20 @@ function formatBytes(bytes) {
 }
 
 function markdownToPlain(text) {
+  const preserved = [];
+  const keep = (value) => {
+    const id = preserved.length;
+    preserved.push(value);
+    return `\x00${id}\x00`;
+  };
+
   return String(text ?? '')
     .replace(/\r\n/g, '\n')
     .replace(/```[\s\S]*?```/g, match => match.replace(/```/g, '').trim())
     .replace(/`([^`]+)`/g, '$1')
     .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) => `${keep(label)} (${keep(url)})`)
+    .replace(/https?:\/\/[^\s)]+/g, keep)
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')
@@ -78,6 +86,7 @@ function markdownToPlain(text) {
     .replace(/_([^_]+)_/g, '$1')
     .replace(/^[-*+]\s+/gm, '- ')
     .replace(/\n{3,}/g, '\n\n')
+    .replace(/\x00(\d+)\x00/g, (_, index) => preserved[Number(index)])
     .trim();
 }
 
