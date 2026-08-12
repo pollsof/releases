@@ -13,8 +13,9 @@ const PRODUCT_NAMES = {
 
 const STAGING_PRODUCTS = new Set(['green', 'tech', 'stock', 'snack']);
 const LIBERABLE_PRODUCTS = new Set(['green', 'tech', 'stock', 'snack']);
+const PAGES_NOTIFIED_PREFIXES = ['green', 'tech', 'stock', 'snack', 'api', 'instalador', 'desinstalador'];
 
-const MAX_BODY_CHARS = 3000;
+const MAX_CHANGELOG_CHARS = 2800;
 const MAX_MESSAGE_CHARS = 4096;
 
 function parseTag(tagName) {
@@ -41,6 +42,35 @@ function parseTag(tagName) {
     version: null,
     kind: 'unknown',
   };
+}
+
+export function resolveReleaseTagFromCommitMessage(message) {
+  const firstLine = String(message ?? '').split('\n')[0].trim();
+
+  let match = firstLine.match(/^Atualiza (\w+)\/teste\.json para v(.+)$/i);
+  if (match) return `${match[1].toLowerCase()}-v${match[2]}`;
+
+  match = firstLine.match(/^Atualiza api\/winapi\.json para v(.+)$/i);
+  if (match) return `api-v${match[1]}`;
+
+  match = firstLine.match(/^chore: atualizar instaladores v(.+)$/i);
+  if (match) return `instalador-v${match[1]}`;
+
+  match = firstLine.match(/^chore: atualizar Desinstalador v(.+)$/i);
+  if (match) return `desinstalador-v${match[1]}`;
+
+  match = firstLine.match(/^release: (\w+) PR #(\d+) index entry v([\d.]+)$/i);
+  if (match) {
+    const revision = match[3].split('.').pop();
+    return `${match[1].toLowerCase()}-prv-${match[2]}.${revision}`;
+  }
+
+  return null;
+}
+
+export function shouldNotifyOnReleaseEvent(tagName) {
+  const product = parseTag(tagName).product;
+  return !PAGES_NOTIFIED_PREFIXES.includes(product);
 }
 
 function productDisplayName(product) {
@@ -84,8 +114,6 @@ function markdownToPlain(text) {
     .replace(/\*([^*]+)\*/g, '$1')
     .replace(/__([^_]+)__/g, '$1')
     .replace(/_([^_]+)_/g, '$1')
-    .replace(/^[-*+]\s+/gm, '- ')
-    .replace(/\n{3,}/g, '\n\n')
     .replace(/\x00(\d+)\x00/g, (_, index) => preserved[Number(index)])
     .trim();
 }
@@ -95,65 +123,90 @@ function truncate(text, maxChars) {
   return `${text.slice(0, maxChars - 24).trimEnd()}\n\n... (mensagem truncada)`;
 }
 
-function formatAssets(assets) {
-  if (!Array.isArray(assets) || assets.length === 0) {
-    return 'Artefatos:\n- (nenhum artefato listado na release)';
-  }
+function extractChangelog(body) {
+  let text = markdownToPlain(body);
+  if (!text) return '';
 
-  const lines = ['Artefatos:'];
-  for (const asset of assets) {
+  const parts = text.split(/\n-{3,}\n/);
+  text = parts[0];
+
+  const lines = text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => {
+      if (!line) return false;
+      if (/^novidades(?:\s+e\s+melhorias)?$/i.test(line)) return false;
+      if (/^pollaris\s+/i.test(line) && /\bv?\d+\.\d+\.\d+\.\d+/i.test(line)) return false;
+      if (/^download:/i.test(line)) return false;
+      if (/^configurac[aã]o de atualiza[cç][aã]o:/i.test(line)) return false;
+      if (/^requisitos:/i.test(line)) return false;
+      if (/^manifesto /i.test(line)) return false;
+      if (/^linux /i.test(line) || /^windows /i.test(line)) return false;
+      return true;
+    });
+
+  const changelog = lines.join('\n').trim();
+  return truncate(changelog, MAX_CHANGELOG_CHARS);
+}
+
+function buildLinks(release, parsed) {
+  const links = [];
+
+  for (const asset of release.assets ?? []) {
     const size = formatBytes(asset.size);
     const label = size ? `${asset.name} (${size})` : asset.name;
-    lines.push(`- ${label}`);
-    if (asset.browser_download_url) {
-      lines.push(`  ${asset.browser_download_url}`);
-    }
+    links.push(`- ${label}: ${asset.browser_download_url}`);
   }
-  return lines.join('\n');
+
+  if (STAGING_PRODUCTS.has(parsed.product)) {
+    links.push(`- Staging: https://releases.pollaris.com.br/${parsed.product}/teste.json`);
+  }
+
+  if (release.html_url) {
+    links.push(`- Release: ${release.html_url}`);
+  }
+
+  if (parsed.kind === 'preview') {
+    links.push('- Preview de PR (nao liberavel via /liberar)');
+  } else if (parsed.kind === 'production' && LIBERABLE_PRODUCTS.has(parsed.product) && parsed.version) {
+    links.push(`- Liberar: /liberar ${parsed.product} ${parsed.version}`);
+  }
+
+  if (links.length === 0) {
+    links.push('- (nenhum link disponivel)');
+  }
+
+  return links.join('\n');
+}
+
+function buildHeader(release, parsed) {
+  const productName = productDisplayName(parsed.product);
+
+  if (parsed.kind === 'preview') {
+    return `[PREVIEW PR] ${productName}`;
+  }
+
+  if (parsed.kind === 'production' && parsed.version) {
+    return `[NOVA RELEASE] ${productName} v${parsed.version}`;
+  }
+
+  return `[NOVA RELEASE] ${release.name ?? release.tag_name}`;
 }
 
 export function formatReleaseTelegramMessage(release) {
-  const tagName = release.tag_name ?? '';
-  const parsed = parseTag(tagName);
-  const productName = productDisplayName(parsed.product);
-  const releaseUrl = release.html_url ?? `https://github.com/pollsof/releases/releases/tag/${tagName}`;
+  const parsed = parseTag(release.tag_name ?? '');
+  const header = buildHeader(release, parsed);
+  const changelog = extractChangelog(release.body);
+  const links = buildLinks(release, parsed);
 
-  const lines = [];
+  const lines = [header, ''];
 
-  if (parsed.kind === 'preview') {
-    lines.push(`[PREVIEW PR] ${productName} — ${tagName}`);
-  } else if (parsed.kind === 'production') {
-    lines.push(`[NOVA RELEASE] ${productName}${parsed.version ? ` v${parsed.version}` : ''}`);
-    lines.push(`Tag: ${tagName}`);
-  } else {
-    lines.push(`[NOVA RELEASE] ${release.name ?? tagName}`);
-    lines.push(`Tag: ${tagName}`);
-  }
-
-  lines.push(`Release: ${releaseUrl}`);
-  lines.push('');
-  lines.push(formatAssets(release.assets));
-
-  if (STAGING_PRODUCTS.has(parsed.product)) {
-    lines.push('');
-    lines.push(`Staging: https://releases.pollaris.com.br/${parsed.product}/teste.json`);
-  }
-
-  const body = markdownToPlain(release.body);
-  if (body) {
-    lines.push('');
-    lines.push('Novidades:');
-    lines.push(truncate(body, MAX_BODY_CHARS));
-  }
+  lines.push('Novidades:');
+  lines.push(changelog || '- Melhorias gerais e correcoes');
 
   lines.push('');
-
-  if (parsed.kind === 'preview') {
-    lines.push('Preview de PR — nao liberavel via /liberar.');
-    lines.push('Use o seletor Colaborando no cliente.');
-  } else if (parsed.kind === 'production' && LIBERABLE_PRODUCTS.has(parsed.product) && parsed.version) {
-    lines.push(`Para liberar: /liberar ${parsed.product} ${parsed.version}`);
-  }
+  lines.push('Links:');
+  lines.push(links);
 
   return truncate(lines.join('\n'), MAX_MESSAGE_CHARS);
 }
