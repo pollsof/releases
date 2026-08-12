@@ -1,0 +1,74 @@
+name: Notificar release no Telegram
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Tag da release para simular notificacao (ex: green-v3.0.0.122)'
+        required: true
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Carregar dados da release
+        id: release
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+        with:
+          script: |
+            let release;
+
+            if (context.eventName === 'workflow_dispatch') {
+              const tag = process.env.RELEASE_TAG;
+              const { data } = await github.rest.repos.getReleaseByTag({
+                owner: 'pollsof',
+                repo: 'releases',
+                tag,
+              });
+              release = data;
+            } else {
+              release = context.payload.release;
+            }
+
+            if (!release.assets?.length && release.id) {
+              const { data } = await github.rest.repos.getRelease({
+                owner: 'pollsof',
+                repo: 'releases',
+                release_id: release.id,
+              });
+              release = data;
+            }
+
+            core.setOutput('release_json', JSON.stringify(release));
+
+      - name: Montar mensagem
+        id: message
+        env:
+          RELEASE_JSON: ${{ steps.release.outputs.release_json }}
+        run: node .github/scripts/format-release-telegram.mjs
+
+      - name: Enviar notificacao Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MESSAGE: ${{ steps.message.outputs.message }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "::warning::TELEGRAM_BOT_TOKEN ou TELEGRAM_CHAT_ID nao configurado."
+            exit 0
+          fi
+
+          jq -n \
+            --arg chat_id "$TELEGRAM_CHAT_ID" \
+            --arg text "$MESSAGE" \
+            '{chat_id: $chat_id, text: $text, disable_web_page_preview: true}' \
+          | curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -H "Content-Type: application/json" \
+              -d @-
