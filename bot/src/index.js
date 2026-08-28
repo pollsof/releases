@@ -20,11 +20,20 @@
  *   /mesclar {produto} {numero}           -> mescla PR no repositorio de codigo do produto
  */
 
-const BOT_VERSION = '2.4.0';
+import {
+  VALID_PROFILES,
+  KvUnavailableError,
+  splitEnv,
+  isEnvRoot,
+  profileIsRoot,
+  profileIsAuthorized,
+  getUserProfile,
+  setUserProfile,
+  removeBotUser,
+  listAllUsers,
+} from './users.js';
 
-const VALID_PROFILES = ['root', 'usuario'];
-const KV_USERS_KEY = 'bot_users';
-const KV_LEGACY_KEY = 'allowed_users';
+const BOT_VERSION = '2.4.1';
 
 export default {
   async fetch(request, env) {
@@ -463,34 +472,45 @@ async function handleUser(ctx, targetId, perfilRaw, send) {
     return;
   }
 
-  if (perfil === 'remover') {
-    const seed = splitEnv(ctx.env.ALLOWED_USERS);
-    if (seed.includes(targetId)) {
+  try {
+    if (perfil === 'remover') {
+      const seed = splitEnv(ctx.env.ALLOWED_USERS);
+      if (seed.includes(targetId)) {
+        await send(
+          `Erro: ID \`${targetId}\` esta no ALLOWED\\_USERS do ambiente e nao pode ser removido pelo bot.`,
+          true
+        );
+        return;
+      }
+      const existing = await getUserProfile(ctx.env, targetId);
+      if (!existing) {
+        await send(`Usuario \`${targetId}\` nao encontrado.`, true);
+        return;
+      }
+      await removeBotUser(ctx.env, targetId);
+      await send(`Acesso removido para ID \`${targetId}\`.`, true);
+      return;
+    }
+
+    if (!VALID_PROFILES.includes(perfil)) {
+      await send(`Erro: perfil invalido. Use: ${VALID_PROFILES.join(', ')} ou remover.`, true);
+      return;
+    }
+
+    const existed = (await getUserProfile(ctx.env, targetId)) !== null;
+    await setUserProfile(ctx.env, targetId, perfil);
+    const acao = existed ? 'atualizado' : 'criado';
+    await send(`Usuario \`${targetId}\` ${acao} com perfil *${perfil}*.`, true);
+  } catch (err) {
+    if (err instanceof KvUnavailableError) {
       await send(
-        `Erro: ID \`${targetId}\` esta no ALLOWED\\_USERS do ambiente e nao pode ser removido pelo bot.`,
+        'Erro: armazenamento de usuarios \\(KV\\) nao configurado. Contate o admin.',
         true
       );
       return;
     }
-    const existing = await getUserProfile(ctx.env, targetId);
-    if (!existing) {
-      await send(`Usuario \`${targetId}\` nao encontrado.`, true);
-      return;
-    }
-    await removeBotUser(ctx.env, targetId);
-    await send(`Acesso removido para ID \`${targetId}\`.`, true);
-    return;
+    throw err;
   }
-
-  if (!VALID_PROFILES.includes(perfil)) {
-    await send(`Erro: perfil invalido. Use: ${VALID_PROFILES.join(', ')} ou remover.`, true);
-    return;
-  }
-
-  const existed = (await getUserProfile(ctx.env, targetId)) !== null;
-  await setUserProfile(ctx.env, targetId, perfil);
-  const acao = existed ? 'atualizado' : 'criado';
-  await send(`Usuario \`${targetId}\` ${acao} com perfil *${perfil}*.`, true);
 }
 
 async function handleMesclarPick(ctx, produtoRaw, send) {
@@ -915,99 +935,6 @@ async function getBotUsername(env) {
   return cachedBotUsername;
 }
 
-// Gerenciamento de acesso (Cloudflare KV)
-
-function isEnvRoot(env, userId) {
-  return env.ROOT_ID && userId === String(env.ROOT_ID);
-}
-
-function profileIsRoot(profile) {
-  return profile === 'root';
-}
-
-function profileIsAuthorized(profile) {
-  return profile === 'root' || profile === 'usuario';
-}
-
-async function loadBotUsers(env) {
-  if (!env.POLLARIS_KV) return {};
-
-  const stored = await env.POLLARIS_KV.get(KV_USERS_KEY);
-  if (stored) return JSON.parse(stored);
-
-  const legacy = await env.POLLARIS_KV.get(KV_LEGACY_KEY);
-  const users = {};
-  if (legacy) {
-    const list = JSON.parse(legacy);
-    if (Array.isArray(list)) {
-      for (const id of list) {
-        users[String(id)] = 'usuario';
-      }
-      await env.POLLARIS_KV.put(KV_USERS_KEY, JSON.stringify(users));
-    }
-  }
-  return users;
-}
-
-async function getKvUserProfile(env, userId) {
-  const users = await loadBotUsers(env);
-  return users[userId] ?? null;
-}
-
-async function getUserProfile(env, userId) {
-  if (isEnvRoot(env, userId)) return 'root';
-  const kvProfile = await getKvUserProfile(env, userId);
-  if (kvProfile) return kvProfile;
-  const seed = splitEnv(env.ALLOWED_USERS);
-  if (seed.includes(userId)) return 'usuario';
-  return null;
-}
-
-async function setUserProfile(env, userId, profile) {
-  const users = await loadBotUsers(env);
-  users[String(userId)] = profile;
-  if (env.POLLARIS_KV) {
-    await env.POLLARIS_KV.put(KV_USERS_KEY, JSON.stringify(users));
-  }
-}
-
-async function removeBotUser(env, userId) {
-  const users = await loadBotUsers(env);
-  delete users[String(userId)];
-  if (env.POLLARIS_KV) {
-    await env.POLLARIS_KV.put(KV_USERS_KEY, JSON.stringify(users));
-  }
-}
-
-async function listAllUsers(env) {
-  const users = await loadBotUsers(env);
-  const seen = new Set();
-  const result = [];
-
-  if (env.ROOT_ID) {
-    const rootId = String(env.ROOT_ID);
-    result.push({ id: rootId, profile: 'root' });
-    seen.add(rootId);
-  }
-
-  for (const [id, profile] of Object.entries(users)) {
-    if (!seen.has(id)) {
-      result.push({ id, profile });
-      seen.add(id);
-    }
-  }
-
-  const seed = splitEnv(env.ALLOWED_USERS);
-  for (const id of seed) {
-    if (!seen.has(id)) {
-      result.push({ id, profile: 'usuario' });
-      seen.add(id);
-    }
-  }
-
-  return result;
-}
-
 function ghHeaders(token) {
   return {
     Authorization: `Bearer ${token}`,
@@ -1170,10 +1097,6 @@ function answerCallbackQuery(token, callbackQueryId, text = null) {
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify(body),
   });
-}
-
-function splitEnv(str) {
-  return (str ?? '').split(',').map(s => s.trim()).filter(Boolean);
 }
 
 function normalizeDigits(str) {

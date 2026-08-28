@@ -11,11 +11,9 @@ MERGE_REPO_green = "pollsof/green"
 MERGE_REPO_snack = "pollsof/snack"
 MERGE_METHOD = "merge"
 
-# Preencha o id do namespace KV ja usado pelo worker em producao.
-# Liste com: wrangler kv namespace list
-# [[kv_namespaces]]
-# binding = "POLLARIS_KV"
-# id = "SEU_KV_NAMESPACE_ID"
+[[kv_namespaces]]
+binding = "POLLARIS_KV"
+id = "6381faa16dfa4e77bca33eb83df01741"
 
 # Secrets (nao commitar): wrangler secret put TELEGRAM_BOT_TOKEN
 #   TELEGRAM_BOT_TOKEN, GITHUB_TOKEN, ROOT_ID, ALLOWED_USERS
