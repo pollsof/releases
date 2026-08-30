@@ -17,6 +17,8 @@
  *   /user {id} {perfil}                   -> cria ou atualiza usuario (root|usuario)
  *   /user {id} remover                    -> remove acesso
  *   /usuarios                             -> lista usuarios e perfis
+ *   /produto {nome} adicionar             -> adiciona produto na lista
+ *   /produto {nome} remover               -> remove produto da lista
  *   /mesclar {produto} {numero}           -> mescla PR no repositorio de codigo do produto
  */
 
@@ -32,8 +34,14 @@ import {
   removeBotUser,
   listAllUsers,
 } from './users.js';
+import {
+  listProducts,
+  resolveProduct,
+  addProduct,
+  removeProduct,
+} from './products.js';
 
-const BOT_VERSION = '2.4.1';
+const BOT_VERSION = '2.5.0';
 
 export default {
   async fetch(request, env) {
@@ -125,6 +133,13 @@ export default {
         return new Response('OK', { status: 200 });
       }
 
+      const matchProduto = text.match(/^\/produto(?:@\S+)?\s+(\S+)\s+(adicionar|remover)/i);
+      if (matchProduto) {
+        if (!ctx.isRoot) return new Response('OK', { status: 200 });
+        await handleProduto(ctx, matchProduto[1], matchProduto[2], reply);
+        return new Response('OK', { status: 200 });
+      }
+
       const matchMesclar = text.match(/^\/mesclar(?:@\S+)?\s+(\S+)\s+(\d+)/i);
       if (matchMesclar) {
         if (!ctx.isRoot) return new Response('OK', { status: 200 });
@@ -133,7 +148,7 @@ export default {
       }
 
       if (/^\/produtos(?:@\S+)?/i.test(text)) {
-        await reply(buildProductsText(env), true, productMenuKeyboard(env, 'cmd:menu'));
+        await reply(await buildProductsText(env), true, await productMenuKeyboard(env, 'cmd:menu'));
         return new Response('OK', { status: 200 });
       }
 
@@ -210,7 +225,7 @@ async function handleCallback(callback, env) {
   if (!ctx.authorized) return;
 
   if (data === 'cmd:produtos') {
-    await edit(buildProductsText(env), true, productMenuKeyboard(env, 'cmd:menu'));
+    await edit(await buildProductsText(env), true, await productMenuKeyboard(env, 'cmd:menu'));
     return;
   }
 
@@ -221,7 +236,11 @@ async function handleCallback(callback, env) {
   }
 
   if (data === 'cmd:versao_menu') {
-    await edit('Selecione o produto para ver o staging:', true, productMenuKeyboard(env, 'versao', 'cmd:menu'));
+    await edit(
+      'Selecione o produto para ver o staging:',
+      true,
+      await productMenuKeyboard(env, 'versao', 'cmd:menu')
+    );
     return;
   }
 
@@ -229,7 +248,7 @@ async function handleCallback(callback, env) {
     await edit(
       'Selecione o produto para liberar o staging em producao:',
       true,
-      productMenuKeyboard(env, 'liberar_staging', 'cmd:menu')
+      await productMenuKeyboard(env, 'liberar_staging', 'cmd:menu')
     );
     return;
   }
@@ -239,7 +258,7 @@ async function handleCallback(callback, env) {
     await edit(
       'Selecione o produto para mesclar uma PR:',
       true,
-      productMenuKeyboard(env, 'mesclar_pick', 'cmd:menu')
+      await productMenuKeyboard(env, 'mesclar_pick', 'cmd:menu')
     );
     return;
   }
@@ -252,7 +271,7 @@ async function handleCallback(callback, env) {
 
   const matchLiberarStaging = data.match(/^liberar_staging:(\S+)$/);
   if (matchLiberarStaging) {
-    const produto = resolveProduct(ctx.env, matchLiberarStaging[1]);
+    const produto = await resolveProduct(ctx.env, matchLiberarStaging[1]);
     if (!produto) {
       await edit(`Erro: produto desconhecido: *${esc(matchLiberarStaging[1])}*`, true, mainMenuKeyboard(env, ctx));
       return;
@@ -361,6 +380,8 @@ function buildHelpText(ctx) {
     lines.push('`/user {id} {perfil}` - cria ou atualiza (root|usuario)');
     lines.push('`/user {id} remover` - remove acesso');
     lines.push('`/usuarios` - lista usuarios e perfis');
+    lines.push('`/produto {nome} adicionar` - adiciona produto');
+    lines.push('`/produto {nome} remover` - remove produto');
     lines.push('`/mesclar {produto} {numero}` - mescla PR no repo de codigo');
   }
   return lines.join('\n');
@@ -373,9 +394,15 @@ function buildFallbackText(ctx) {
   return 'Ola! Nao entendi essa mensagem. Use `/ajuda` para ver o que posso fazer ou `/myid` para obter seu ID.';
 }
 
-function buildProductsText(env) {
-  const lista = splitEnv(env.VALID_PRODUCTS).join(', ') || '(nenhum configurado)';
+async function buildProductsText(env) {
+  const products = await listProducts(env);
+  const lista = products.join(', ') || '(nenhum configurado)';
   return `Produtos disponiveis: ${lista}`;
+}
+
+async function productsListText(env) {
+  const products = await listProducts(env);
+  return products.join(', ') || '(nenhum)';
 }
 
 async function buildUsersText(env) {
@@ -411,8 +438,8 @@ function mainMenuKeyboard(env, ctx) {
   return { inline_keyboard: rows };
 }
 
-function productMenuKeyboard(env, action, backAction = 'cmd:menu') {
-  const products = splitEnv(env.VALID_PRODUCTS);
+async function productMenuKeyboard(env, action, backAction = 'cmd:menu') {
+  const products = await listProducts(env);
   const rows = [];
 
   for (let i = 0; i < products.length; i += 2) {
@@ -426,6 +453,48 @@ function productMenuKeyboard(env, action, backAction = 'cmd:menu') {
 
   rows.push([{ text: 'Voltar', callback_data: backAction }]);
   return { inline_keyboard: rows };
+}
+
+async function handleProduto(ctx, nomeRaw, acaoRaw, send) {
+  const acao = acaoRaw.toLowerCase();
+  try {
+    if (acao === 'adicionar') {
+      const result = await addProduct(ctx.env, nomeRaw);
+      if (!result.added) {
+        await send(`Produto \`${esc(result.name)}\` ja estava na lista.`, true);
+        return;
+      }
+      await send(
+        `Produto \`${esc(result.name)}\` adicionado.\n\n${await buildProductsText(ctx.env)}`,
+        true
+      );
+      return;
+    }
+
+    if (acao === 'remover') {
+      const result = await removeProduct(ctx.env, nomeRaw);
+      if (!result.removed) {
+        await send(`Produto \`${esc(result.name)}\` nao encontrado na lista.`, true);
+        return;
+      }
+      await send(
+        `Produto \`${esc(result.name)}\` removido.\n\n${await buildProductsText(ctx.env)}`,
+        true
+      );
+      return;
+    }
+
+    await send('Erro: use `/produto {nome} adicionar` ou `/produto {nome} remover`.', true);
+  } catch (err) {
+    if (err instanceof KvUnavailableError) {
+      await send(
+        'Erro: armazenamento de produtos \\(KV\\) nao configurado. Contate o admin.',
+        true
+      );
+      return;
+    }
+    await send(`Erro: ${err.message}`, false);
+  }
 }
 
 function confirmLiberarKeyboard(produto) {
@@ -514,7 +583,7 @@ async function handleUser(ctx, targetId, perfilRaw, send) {
 }
 
 async function handleMesclarPick(ctx, produtoRaw, send) {
-  const produto = resolveProduct(ctx.env, produtoRaw);
+  const produto = await resolveProduct(ctx.env, produtoRaw);
   if (!produto) {
     await send(`Erro: produto desconhecido: *${esc(produtoRaw)}*`, true, mainMenuKeyboard(ctx.env, ctx));
     return;
@@ -562,9 +631,9 @@ async function handleMesclarPrepare(ctx, produtoRaw, prNumber, send) {
     return;
   }
 
-  const produto = resolveProduct(ctx.env, produtoRaw);
+  const produto = await resolveProduct(ctx.env, produtoRaw);
   if (!produto) {
-    const valid = splitEnv(ctx.env.VALID_PRODUCTS).join(', ') || '(nenhum)';
+    const valid = await productsListText(ctx.env);
     await send(`Erro: produto desconhecido: *${esc(produtoRaw)}*\nProdutos validos: ${valid}`, true);
     return;
   }
@@ -624,7 +693,7 @@ async function handleMesclarPrepare(ctx, produtoRaw, prNumber, send) {
 }
 
 async function handleMesclarExecute(ctx, produtoRaw, prNumber, send) {
-  const produto = resolveProduct(ctx.env, produtoRaw);
+  const produto = await resolveProduct(ctx.env, produtoRaw);
   if (!produto) {
     await send(`Erro: produto desconhecido: *${esc(produtoRaw)}*`, true);
     return;
@@ -682,9 +751,9 @@ async function handleMesclarExecute(ctx, produtoRaw, prNumber, send) {
 
 async function handleVersao(ctx, produtoRaw, send) {
   const { owner, repo } = githubRepo(ctx.env);
-  const produto = resolveProduct(ctx.env, produtoRaw);
+  const produto = await resolveProduct(ctx.env, produtoRaw);
   if (!produto) {
-    const valid = splitEnv(ctx.env.VALID_PRODUCTS).join(', ') || '(nenhum)';
+    const valid = await productsListText(ctx.env);
     await send(`Erro: produto desconhecido: *${esc(produtoRaw)}*\nProdutos validos: ${valid}`, true);
     return;
   }
@@ -700,7 +769,7 @@ async function handleVersao(ctx, produtoRaw, send) {
     await send(
       `*Staging de ${esc(produto)}:*\n\`\`\`\n${JSON.stringify(content, null, 2)}\n\`\`\``,
       true,
-      productMenuKeyboard(ctx.env, 'versao', 'cmd:menu')
+      await productMenuKeyboard(ctx.env, 'versao', 'cmd:menu')
     );
   } catch (err) {
     await send(`Erro: ${err.message}`);
@@ -714,9 +783,9 @@ async function handleRemover(ctx, produtoRaw, cnpjRaw, send) {
     return;
   }
 
-  const produto = resolveProduct(ctx.env, produtoRaw);
+  const produto = await resolveProduct(ctx.env, produtoRaw);
   if (!produto) {
-    const valid = splitEnv(ctx.env.VALID_PRODUCTS).join(', ') || '(nenhum)';
+    const valid = await productsListText(ctx.env);
     await send(`Erro: produto desconhecido: *${esc(produtoRaw)}*\nProdutos validos: ${valid}`, true);
     return;
   }
@@ -756,9 +825,9 @@ async function handleRemover(ctx, produtoRaw, cnpjRaw, send) {
 
 async function handleLiberar(ctx, sistemaRaw, arg2, arg3, send) {
   const { owner, repo } = githubRepo(ctx.env);
-  const sistema = resolveProduct(ctx.env, sistemaRaw);
+  const sistema = await resolveProduct(ctx.env, sistemaRaw);
   if (!sistema) {
-    const valid = splitEnv(ctx.env.VALID_PRODUCTS).join(', ') || '(nenhum)';
+    const valid = await productsListText(ctx.env);
     await send(
       `Erro: produto desconhecido: *${esc(sistemaRaw)}*\nProdutos validos: ${valid}`,
       true
@@ -967,15 +1036,6 @@ function resolveMergeMethod(env) {
   const method = trimEnv(env.MERGE_METHOD).toLowerCase();
   if (['merge', 'squash', 'rebase'].includes(method)) return method;
   return 'merge';
-}
-
-function resolveProduct(env, input) {
-  const raw = trimEnv(input);
-  if (!raw) return null;
-  const products = splitEnv(env.VALID_PRODUCTS);
-  if (!products.length) return raw.toLowerCase();
-  const match = products.find(p => p.toLowerCase() === raw.toLowerCase());
-  return match ? match.toLowerCase() : null;
 }
 
 function ghEncodePath(path) {
