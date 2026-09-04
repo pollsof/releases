@@ -35,20 +35,53 @@ export function buildLiberarStartedMessage({ sistema, versao, alvo, destPath }) 
   ].join('\n');
 }
 
-export function buildLiberarReadyMessage({ username, sistema, versao, alvo }) {
-  const who = mention(username);
-  if (isCnpjAlvo(sistema, alvo)) {
-    return `${who}, o cliente ${alvo} ja pode atualizar para a versao ${versao}`;
+export function buildLiberarReadyMessage(pending) {
+  const who = telegramMention(pending);
+  if (isCnpjAlvo(pending.sistema, pending.alvo)) {
+    return `${who}, o cliente ${htmlEsc(pending.alvo)} ja pode atualizar para a versao ${htmlEsc(pending.versao)}`;
   }
-  return `${who}, a producao de ${sistema} ja pode atualizar para a versao ${versao}`;
+  return `${who}, a producao de ${htmlEsc(pending.sistema)} ja pode atualizar para a versao ${htmlEsc(pending.versao)}`;
 }
 
-export function buildLiberarFailedMessage({ username, sistema, versao, alvo }) {
-  const who = mention(username);
-  if (isCnpjAlvo(sistema, alvo)) {
-    return `${who}, o GitHub Pages falhou ao publicar a versao ${versao} para o cliente ${alvo} (${sistema}).`;
+export function buildLiberarFailedMessage(pending) {
+  const who = telegramMention(pending);
+  if (isCnpjAlvo(pending.sistema, pending.alvo)) {
+    return `${who}, o GitHub Pages falhou ao publicar a versao ${htmlEsc(pending.versao)} para o cliente ${htmlEsc(pending.alvo)} (${htmlEsc(pending.sistema)}).`;
   }
-  return `${who}, o GitHub Pages falhou ao publicar a versao ${versao} na producao de ${sistema}.`;
+  return `${who}, o GitHub Pages falhou ao publicar a versao ${htmlEsc(pending.versao)} na producao de ${htmlEsc(pending.sistema)}.`;
+}
+
+export function telegramMention({ userId, username, displayName }) {
+  const label = htmlEsc(displayLabel({ userId, username, displayName }));
+  if (userId) {
+    return `<a href="tg://user?id=${htmlEsc(String(userId))}">${label}</a>`;
+  }
+  const handle = telegramHandle(username);
+  if (handle) return `@${htmlEsc(handle)}`;
+  return label;
+}
+
+function displayLabel({ userId, username, displayName }) {
+  const name = String(displayName ?? '').trim();
+  if (name) return name;
+  const handle = telegramHandle(username);
+  if (handle) return `@${handle}`;
+  if (userId) return `user ${userId}`;
+  return 'usuario';
+}
+
+function telegramHandle(username) {
+  const raw = String(username ?? '').trim().replace(/^@/, '');
+  if (!raw || /\s/.test(raw)) return '';
+  if (!/^[A-Za-z0-9_]{5,32}$/.test(raw)) return '';
+  return raw;
+}
+
+function htmlEsc(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 export async function saveLiberarPending(env, sha, pending) {
@@ -101,12 +134,6 @@ export async function waitForPagesJson(destPath, { fetchImpl = fetch, sleepImpl 
     }
   }
   return lastStatus === 200;
-}
-
-function mention(username) {
-  const raw = String(username ?? '').trim();
-  if (!raw) return 'usuario';
-  return raw.startsWith('@') ? raw : `@${raw}`;
 }
 
 function esc(str) {

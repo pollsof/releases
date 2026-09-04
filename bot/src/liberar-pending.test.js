@@ -61,39 +61,44 @@ describe('mensagens', () => {
     assert.match(text, /green\/green\.json/);
   });
 
-  it('avisa CNPJ pronto com mention', () => {
+  it('menciona por user id quando nao ha @username', () => {
     assert.equal(
       buildLiberarReadyMessage({
-        username: '@natharuc',
+        userId: '1879964763',
+        username: '',
+        displayName: 'Fillype Magno',
         sistema: 'green',
         versao: '3.0.0.143',
         alvo: '48255041000155',
       }),
-      '@natharuc, o cliente 48255041000155 ja pode atualizar para a versao 3.0.0.143'
+      '<a href="tg://user?id=1879964763">Fillype Magno</a>, o cliente 48255041000155 ja pode atualizar para a versao 3.0.0.143'
     );
   });
 
-  it('avisa producao pronta', () => {
+  it('menciona por user id mesmo com @username', () => {
     assert.equal(
       buildLiberarReadyMessage({
+        userId: '1722873719',
         username: 'natharuc',
+        displayName: 'Nathan',
         sistema: 'green',
         versao: '3.0.0.143',
         alvo: 'green',
       }),
-      '@natharuc, a producao de green ja pode atualizar para a versao 3.0.0.143'
+      '<a href="tg://user?id=1722873719">Nathan</a>, a producao de green ja pode atualizar para a versao 3.0.0.143'
     );
   });
 
-  it('avisa falha do Pages', () => {
+  it('avisa falha do Pages com mention por id', () => {
     assert.match(
       buildLiberarFailedMessage({
-        username: '@natharuc',
+        userId: '1879964763',
+        displayName: 'Fillype',
         sistema: 'green',
         versao: '3.0.0.143',
         alvo: '48255041000155',
       }),
-      /falhou ao publicar/
+      /tg:\/\/user\?id=1879964763/
     );
   });
 });

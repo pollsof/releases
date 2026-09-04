@@ -51,7 +51,7 @@ import {
   buildLiberarFailedMessage,
 } from './liberar-pending.js';
 
-const BOT_VERSION = '2.6.0';
+const BOT_VERSION = '2.6.1';
 
 export default {
   async fetch(request, env) {
@@ -100,10 +100,8 @@ export default {
     );
 
     const profile  = await getUserProfile(env, userId);
-    const username = message.from?.username
-      ? `@${message.from.username}`
-      : (message.from?.first_name ?? `user ${userId}`);
-    const ctx      = buildCtx(env, chatId, userId, username, profile);
+    const identity = telegramIdentity(message.from, userId);
+    const ctx      = buildCtx(env, chatId, userId, identity, profile);
 
     const reply = (msg, md = false, keyboard = null) =>
       sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, msg, md, keyboard);
@@ -194,12 +192,31 @@ export default {
   }
 };
 
-function buildCtx(env, chatId, userId, username, profile) {
+function telegramIdentity(from, userId) {
+  const telegramUsername = from?.username ? String(from.username) : '';
+  const displayName = [from?.first_name, from?.last_name].filter(Boolean).join(' ')
+    || (telegramUsername ? `@${telegramUsername}` : `user ${userId}`);
+  const username = telegramUsername ? `@${telegramUsername}` : displayName;
+  return { username, telegramUsername, displayName };
+}
+
+function buildCtx(env, chatId, userId, identity, profile) {
+  const username = typeof identity === 'string'
+    ? identity
+    : (identity?.username ?? `user ${userId}`);
+  const telegramUsername = typeof identity === 'string'
+    ? String(identity).replace(/^@/, '')
+    : (identity?.telegramUsername ?? '');
+  const displayName = typeof identity === 'string'
+    ? username
+    : (identity?.displayName ?? username);
   return {
     env,
     chatId,
     userId,
     username,
+    telegramUsername,
+    displayName,
     profile,
     isRoot: profileIsRoot(profile),
     authorized: profileIsAuthorized(profile),
@@ -217,10 +234,7 @@ async function handleCallback(callback, env) {
 
   if (!chatId || !messageId) return;
 
-  const username = callback.from?.username
-    ? `@${callback.from.username}`
-    : (callback.from?.first_name ?? `user ${userId}`);
-  const ctx = buildCtx(env, chatId, userId, username, profile);
+  const ctx = buildCtx(env, chatId, userId, telegramIdentity(callback.from, userId), profile);
 
   const edit = (msg, md = false, keyboard = null) =>
     editMessage(env.TELEGRAM_BOT_TOKEN, chatId, messageId, msg, md, keyboard);
@@ -935,7 +949,9 @@ async function handleLiberar(ctx, sistemaRaw, arg2, arg3, send) {
         try {
           await saveLiberarPending(ctx.env, commitSha, {
             chatId: ctx.chatId,
-            username: ctx.username,
+            userId: ctx.userId,
+            username: ctx.telegramUsername,
+            displayName: ctx.displayName,
             sistema,
             versao,
             alvo,
@@ -1009,14 +1025,14 @@ async function handlePagesDeployed(request, env) {
       env.TELEGRAM_BOT_TOKEN,
       pending.chatId,
       buildLiberarReadyMessage(pending),
-      false
+      'HTML'
     );
   } else if (state === 'failure' || state === 'error') {
     await sendMessage(
       env.TELEGRAM_BOT_TOKEN,
       pending.chatId,
       buildLiberarFailedMessage(pending),
-      false
+      'HTML'
     );
   } else {
     return new Response(JSON.stringify({ ok: true, skipped: true }), {
@@ -1198,9 +1214,10 @@ function ghMergePull(token, owner, repo, number, mergeMethod) {
   );
 }
 
-function sendMessage(token, chatId, text, markdown = false, replyMarkup = null) {
+function sendMessage(token, chatId, text, parseMode = false, replyMarkup = null) {
   const body = { chat_id: chatId, text };
-  if (markdown) body.parse_mode = 'Markdown';
+  if (parseMode === true || parseMode === 'Markdown') body.parse_mode = 'Markdown';
+  if (parseMode === 'HTML') body.parse_mode = 'HTML';
   if (replyMarkup) body.reply_markup = replyMarkup;
   return fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method:  'POST',
