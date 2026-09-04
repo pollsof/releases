@@ -40,11 +40,29 @@ import {
   addProduct,
   removeProduct,
 } from './products.js';
+import {
+  saveLiberarPending,
+  loadLiberarPending,
+  deleteLiberarPending,
+  authorizePagesNotify,
+  waitForPagesJson,
+  buildLiberarStartedMessage,
+  buildLiberarReadyMessage,
+  buildLiberarFailedMessage,
+} from './liberar-pending.js';
 
-const BOT_VERSION = '2.5.0';
+const BOT_VERSION = '2.6.0';
 
 export default {
   async fetch(request, env) {
+    const url = new URL(request.url);
+    if (url.pathname === '/internal/pages-deployed') {
+      if (request.method !== 'POST') {
+        return new Response('Method Not Allowed', { status: 405 });
+      }
+      return handlePagesDeployed(request, env);
+    }
+
     if (request.method !== 'POST') return new Response('OK', { status: 200 });
 
     let update;
@@ -899,10 +917,11 @@ async function handleLiberar(ctx, sistemaRaw, arg2, arg3, send) {
 
     const destRes = await ghGet(ctx.env.GITHUB_TOKEN, owner, repo, destPath);
     const destSha = destRes.ok ? (await destRes.json()).sha : undefined;
+    const versao = String(manifest?.versao ?? arg2 ?? 'desconhecida');
 
     const putRes = await ghPut(
       ctx.env.GITHUB_TOKEN, owner, repo, destPath, contentB64,
-      `release: ${sistema}/${alvo} via Telegram (${ctx.username})`,
+      `release: ${sistema}/${alvo} v${versao} via Telegram (${ctx.username})`,
       destSha
     );
 
@@ -910,9 +929,24 @@ async function handleLiberar(ctx, sistemaRaw, arg2, arg3, send) {
       const body = await putRes.text();
       await send(`Erro: falha no commit (${putRes.status}):\n${body}`);
     } else {
-      const acao = destSha ? 'atualizado' : 'criado';
+      const payload = await putRes.json().catch(() => ({}));
+      const commitSha = payload?.commit?.sha;
+      if (commitSha) {
+        try {
+          await saveLiberarPending(ctx.env, commitSha, {
+            chatId: ctx.chatId,
+            username: ctx.username,
+            sistema,
+            versao,
+            alvo,
+            destPath,
+          });
+        } catch (err) {
+          console.error('Falha ao gravar pending de liberacao:', err);
+        }
+      }
       await send(
-        buildLiberarSuccessMessage(sistema, manifest, alvo, destPath, acao),
+        buildLiberarStartedMessage({ sistema, versao, alvo, destPath }),
         true,
         mainMenuKeyboard(ctx.env, ctx)
       );
@@ -943,22 +977,59 @@ function assertReleaseAllowed(manifest) {
   return null;
 }
 
-function buildLiberarSuccessMessage(sistema, manifest, alvo, destPath, acao) {
-  const versao = manifest?.versao ?? 'desconhecida';
-  const isCnpj = alvo !== sistema;
-  const lines = [
-    `*${esc(sistema)}* liberado com sucesso!`,
-    '',
-    `Versao: \`${esc(versao)}\``,
-  ];
-  if (isCnpj) {
-    lines.push(`Destino: cliente \`${esc(alvo)}\``);
-    lines.push(`Arquivo: \`${esc(destPath)}\``);
-  } else {
-    lines.push(`Destino: producao (\`${esc(destPath)}\`)`);
+async function handlePagesDeployed(request, env) {
+  if (!authorizePagesNotify(request, env)) {
+    return new Response('Unauthorized', { status: 401 });
   }
-  lines.push(`Acao: ${acao}`);
-  return lines.join('\n');
+
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return new Response('Invalid JSON', { status: 400 });
+  }
+
+  const sha = String(payload?.sha ?? '').trim();
+  const state = String(payload?.state ?? '').toLowerCase();
+  if (!sha) {
+    return new Response('sha obrigatorio', { status: 400 });
+  }
+
+  const pending = await loadLiberarPending(env, sha);
+  if (!pending) {
+    return new Response(JSON.stringify({ ok: true, skipped: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (state === 'success') {
+    await waitForPagesJson(pending.destPath);
+    await sendMessage(
+      env.TELEGRAM_BOT_TOKEN,
+      pending.chatId,
+      buildLiberarReadyMessage(pending),
+      false
+    );
+  } else if (state === 'failure' || state === 'error') {
+    await sendMessage(
+      env.TELEGRAM_BOT_TOKEN,
+      pending.chatId,
+      buildLiberarFailedMessage(pending),
+      false
+    );
+  } else {
+    return new Response(JSON.stringify({ ok: true, skipped: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  await deleteLiberarPending(env, sha);
+  return new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
 
 function releaseTagFromManifest(sistema, manifest) {

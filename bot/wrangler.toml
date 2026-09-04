@@ -16,5 +16,5 @@ binding = "POLLARIS_KV"
 id = "6381faa16dfa4e77bca33eb83df01741"
 
 # Secrets (nao commitar): wrangler secret put TELEGRAM_BOT_TOKEN
-#   TELEGRAM_BOT_TOKEN, GITHUB_TOKEN, ROOT_ID, ALLOWED_USERS
+#   TELEGRAM_BOT_TOKEN, GITHUB_TOKEN, ROOT_ID, ALLOWED_USERS, PAGES_NOTIFY_SECRET
 # GITHUB_TOKEN precisa de pull_requests:write nos repos MERGE_REPO_*

@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test src/users.test.js src/products.test.js",
+    "test": "node --test src/users.test.js src/products.test.js src/liberar-pending.test.js",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {

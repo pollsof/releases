@@ -1,0 +1,32 @@
+name: Notificar liberacao no Telegram
+
+on:
+  deployment_status:
+
+jobs:
+  notify:
+    if: >-
+      github.event.deployment.environment == 'github-pages' &&
+      (
+        github.event.deployment_status.state == 'success' ||
+        github.event.deployment_status.state == 'failure' ||
+        github.event.deployment_status.state == 'error'
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Avisar bot do deploy Pages
+        env:
+          BOT_WORKER_URL: https://pollaris-bot.nathanarrudacamara.workers.dev
+          PAGES_NOTIFY_SECRET: ${{ secrets.PAGES_NOTIFY_SECRET }}
+          DEPLOY_SHA: ${{ github.event.deployment.sha }}
+          DEPLOY_STATE: ${{ github.event.deployment_status.state }}
+        run: |
+          if [ -z "$PAGES_NOTIFY_SECRET" ]; then
+            echo "::error::Secret PAGES_NOTIFY_SECRET nao configurado."
+            exit 1
+          fi
+
+          curl -fsS -X POST "${BOT_WORKER_URL}/internal/pages-deployed" \
+            -H "Authorization: Bearer ${PAGES_NOTIFY_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d "{\"sha\":\"${DEPLOY_SHA}\",\"state\":\"${DEPLOY_STATE}\"}"
