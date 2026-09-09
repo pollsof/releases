@@ -167,7 +167,7 @@
 
   <section>
     <h2>Instaladores</h2>
-    <div id="installers"></div>
+    <div id="installers" class="loading">Carregando...</div>
   </section>
 
   <section>
@@ -188,8 +188,8 @@ const PRODUCTS = [
 ];
 
 const INSTALLERS = [
-  { name: 'Instalador Pollaris', path: 'instaladores/pollaris/Instalador.exe' },
-  { name: 'Instalador Prime Data', path: 'instaladores/primedata/Instalador.exe' },
+  { name: 'Instalador Pollaris', json: 'instaladores/instaladores/pollaris/instalador.json' },
+  { name: 'Instalador Prime Data', json: 'instaladores/instaladores/primedata/instalador.json' },
 ];
 
 const UTILS = [
@@ -217,23 +217,24 @@ function esc(s) {
   return d.innerHTML;
 }
 
-async function loadProducts() {
-  const container = document.getElementById('products');
+async function loadJsonItems(items, containerId, emptyMsg) {
+  const container = document.getElementById(containerId);
   container.innerHTML = '';
   let count = 0;
 
-  for (const prod of PRODUCTS) {
+  for (const item of items) {
     try {
-      const res = await fetch(BASE + '/' + prod.id + '/' + prod.id + '.json');
+      const res = await fetch(BASE + '/' + item.json);
       if (!res.ok) continue;
       const data = await res.json();
-      container.appendChild(makeItem(prod.name, 'Versão ' + data.versao, data.url));
+      if (!data.url) continue;
+      container.appendChild(makeItem(item.name, 'Versão ' + data.versao, data.url));
       count++;
     } catch { /* skip */ }
   }
 
   if (count === 0) {
-    container.innerHTML = '<div class="empty">Nenhuma atualização disponível no momento.</div>';
+    container.innerHTML = '<div class="empty">' + emptyMsg + '</div>';
   }
 }
 
@@ -244,8 +245,16 @@ function loadStatic(items, containerId) {
   }
 }
 
-loadProducts();
-loadStatic(INSTALLERS, 'installers');
+loadJsonItems(
+  PRODUCTS.map(prod => ({ name: prod.name, json: prod.id + '/' + prod.id + '.json' })),
+  'products',
+  'Nenhuma atualização disponível no momento.'
+);
+loadJsonItems(
+  INSTALLERS,
+  'installers',
+  'Nenhum instalador disponível no momento.'
+);
 loadStatic(UTILS, 'utils');
 </script>
 
