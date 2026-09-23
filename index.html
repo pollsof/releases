@@ -185,6 +185,7 @@ const DL_ICON = '<svg viewBox="0 0 16 16"><path d="M2.75 14A1.75 1.75 0 0 1 1 12
 const PRODUCTS = [
   { id: 'green', name: 'Pollaris Green' },
   { id: 'snack', name: 'Pollaris Snack' },
+  { id: 'repasse', name: 'Pollaris Repasse', json: 'repasse/teste.json' },
 ];
 
 const INSTALLERS = [
@@ -246,7 +247,7 @@ function loadStatic(items, containerId) {
 }
 
 loadJsonItems(
-  PRODUCTS.map(prod => ({ name: prod.name, json: prod.id + '/' + prod.id + '.json' })),
+  PRODUCTS.map(prod => ({ name: prod.name, json: prod.json || (prod.id + '/' + prod.id + '.json') })),
   'products',
   'Nenhuma atualização disponível no momento.'
 );
