@@ -1,90 +1,175 @@
-name: Deploy Telegram Bot
+name: Migration inspect or rotate Worker GitHub secret only
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'bot/**'
-      - '.github/workflows/deploy-bot.yml'
   workflow_dispatch:
+    inputs:
+      operation:
+        type: choice
+        required: true
+        default: inspect
+        options:
+          - inspect
+          - rotate_github_token
+      confirm_rotation:
+        type: string
+        required: false
+        default: ''
+
+permissions: {}
+
+concurrency:
+  group: migration-pollaris-bot-secret-only
+  cancel-in-progress: false
 
 jobs:
-  deploy:
+  inspect_or_rotate_secret:
+    if: github.repository_id == '1153156988' && github.repository_owner == 'pollsof' && github.actor_id == '258440570'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: bot
+    timeout-minutes: 5
+    env:
+      OPERATION: ${{ inputs.operation }}
+      ROTATION_CONFIRMATION: ${{ inputs.confirm_rotation }}
+      NEW_WORKER_GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: bot/package-lock.json
-
-      - name: Instalar dependencias
-        run: npm ci
-
-      - name: Validar bundle do Worker
-        run: npx wrangler deploy --dry-run
-
-      - name: Validar secrets do Cloudflare
-        env:
-          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Inspect or rotate only GITHUB_TOKEN, preserving deployed code
+        shell: bash
         run: |
-          if [ -z "$CF_TOKEN" ]; then
-            echo "::error::Secret CLOUDFLARE_API_TOKEN nao configurado."
-            echo "Opcao A (mais facil): em https://dash.cloudflare.com/profile/api-tokens use o template 'Edit Cloudflare Workers'."
-            echo "Opcao B (token customizado): Account > Workers Scripts > Edit (+ Workers KV Storage > Edit se usar /acesso)."
-            echo "Depois adicione o token em Settings > Secrets and variables > Actions > New repository secret."
-            exit 1
-          fi
-          if [ -z "$CF_ACCOUNT" ]; then
-            echo "::error::Secret CLOUDFLARE_ACCOUNT_ID nao configurado."
-            echo "O Account ID fica em https://dash.cloudflare.com/ (barra lateral direita da home)."
-            echo "Adicione como secret CLOUDFLARE_ACCOUNT_ID em Settings > Secrets and variables > Actions."
-            exit 1
-          fi
-
-      - name: Deploy Cloudflare Worker
-        id: deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -o pipefail
-          npx wrangler deploy 2>&1 | tee deploy.log
-          WORKER_URL=$(grep -oE 'https://[a-zA-Z0-9._-]+\.workers\.dev' deploy.log | tail -1)
-          if [ -z "$WORKER_URL" ]; then
-            echo "::error::Nao foi possivel detectar a URL do worker no output do wrangler."
-            exit 1
-          fi
-          echo "worker_url=$WORKER_URL" >> "$GITHUB_OUTPUT"
-          echo "Worker publicado em: $WORKER_URL"
-
-      - name: Atualizar webhook do Telegram
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          WORKER_URL: ${{ steps.deploy.outputs.worker_url }}
-        run: |
-          if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
-            echo "::warning::TELEGRAM_BOT_TOKEN nao configurado; webhook do Telegram nao foi atualizado."
-            exit 0
-          fi
-
-          echo "Webhook atual: $(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo")"
-          echo "Configurando webhook para: $WORKER_URL"
-
-          RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
-            --data-urlencode "url=${WORKER_URL}" \
-            -d 'allowed_updates=["message","edited_message","callback_query"]')
-
-          echo "$RESPONSE"
-          echo "$RESPONSE" | grep -q '"ok":true' || {
-            echo "::error::Falha ao configurar webhook do Telegram"
-            exit 1
-          }
-
-          echo "Webhook apos deploy: $(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo")"
+          set -euo pipefail
+          python3 - <<'PY'
+          """GitHub Actions-only inspect/rotation; never deploys Worker code or touches DNS.
+          
+          Default operation is inspect. The sole allowed Cloudflare write updates the
+          existing GITHUB_TOKEN secret after fixed repository/actor/resource checks.
+          """
+          import datetime
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+          
+          WORKER='pollaris-bot'
+          OWNER_ID=258440570
+          REPOSITORY_IDS={'pollsof/releases':1153156988,'pollsof/green':1158015923,'pollsof/snack':1184503921}
+          CONFIRMATION='pollaris-bot:GITHUB_TOKEN:secret-only'
+          
+          class GuardError(Exception):pass
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+           def redirect_request(self,req,fp,code,msg,headers,newurl):return None
+          
+          def fingerprint(value):
+           return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          
+          def run(env=None,fetch=None,pause=time.sleep):
+           env=os.environ if env is None else env
+           audit={'started_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'operation':env.get('OPERATION','inspect'),
+             'worker':WORKER,'secret_name':'GITHUB_TOKEN','secret_write_performed':False,'worker_code_deployed':False,'dns_touched':False,'requests':[]}
+           opener=urllib.request.build_opener(NoRedirect())
+           def request(label,url,token,method='GET',payload=None):
+            if method!='GET' and not(method=='PUT' and url==cfbase+'/secrets' and payload and
+               set(payload)=={'name','text','type'} and payload['name']=='GITHUB_TOKEN' and payload['type']=='secret_text'):
+             raise GuardError('Unexpected write rejected')
+            headers={'Authorization':'Bearer '+token,'User-Agent':'Pollaris-Secret-Only-Rotation','Accept':'application/json'}
+            body=None
+            if payload is not None:body=json.dumps(payload).encode();headers['Content-Type']='application/json'
+            try:
+             if fetch is not None:status,data=fetch(label,url,headers,method,payload)
+             else:
+              with opener.open(urllib.request.Request(url,data=body,headers=headers,method=method),timeout=40) as response:
+               status=response.status;data=json.load(response)
+            except urllib.error.HTTPError as error:
+             audit['requests'].append({'operation':label,'http':error.code});raise GuardError(label+' HTTP '+str(error.code)) from None
+            audit['requests'].append({'operation':label,'http':status})
+            if status!=200:raise GuardError(label+' HTTP '+str(status))
+            if 'success' in data:
+             if not data['success']:raise GuardError(label+' Cloudflare success=false')
+             return data.get('result')
+            return data
+           def active_version(cf_token):
+            result=request('list_deployments',cfbase+'/deployments',cf_token)
+            deployments=result.get('deployments',[]) if isinstance(result,dict) else result
+            if not deployments:raise GuardError('No active deployment found')
+            deployment=max(deployments,key=lambda d:d.get('created_on',''))
+            versions=deployment.get('versions',[])
+            if len(versions)!=1 or float(versions[0].get('percentage',0))!=100:
+             raise GuardError('Gradual/multiple active versions require separate rotation plan')
+            vid=versions[0]['version_id']
+            resource=request('get_active_version',cfbase+'/versions/'+vid,cf_token)
+            resources=resource.get('resources',{});etag=resources.get('script',{}).get('etag')
+            if not etag:raise GuardError('Cannot prove current code hash; no rotation permitted')
+            bindings=resources.get('bindings',[])
+            binding_by_name={b['name']:b for b in bindings}
+            if binding_by_name.get('GITHUB_TOKEN',{}).get('type')!='secret_text':raise GuardError('Existing GITHUB_TOKEN secret binding absent')
+            routing={name:binding_by_name.get(name,{}).get('text') for name in ['REPO_OWNER','REPO_NAME','MERGE_REPO_green','MERGE_REPO_snack']}
+            expected={'REPO_OWNER':'pollsof','REPO_NAME':'releases','MERGE_REPO_green':'pollsof/green','MERGE_REPO_snack':'pollsof/snack'}
+            if routing!=expected:raise GuardError('Worker repository routing differs from expected organization routes')
+            other_bindings=[]
+            for binding in bindings:
+             if binding['name']=='GITHUB_TOKEN':continue
+             clean=dict(binding)
+             if binding.get('type') in ['secret_text','secret_key']:clean.pop('text',None);clean.pop('key_base64',None);clean.pop('key_jwk',None)
+             other_bindings.append(clean)
+            return {'deployment_id':deployment['id'],'version_id':vid,'code_etag':etag,
+              'binding_names_types':sorted([{'name':b['name'],'type':b['type']} for b in bindings],key=lambda b:b['name']),
+              'other_bindings_sha256':fingerprint(sorted(other_bindings,key=lambda b:b['name'])),
+              'runtime_sha256':fingerprint(resources.get('script_runtime',{})),'routing_matches_expected':True}
+           try:
+            if env.get('GITHUB_REPOSITORY')!='pollsof/releases' or env.get('GITHUB_REPOSITORY_ID')!=str(REPOSITORY_IDS['pollsof/releases']):
+             raise GuardError('Run only after transfer, inside the original pollsof/releases repository ID')
+            if env.get('GITHUB_ACTOR_ID')!=str(OWNER_ID):raise GuardError('Only the authorized migration owner may dispatch this job')
+            operation=audit['operation']
+            if operation not in ['inspect','rotate_github_token']:raise GuardError('Unknown operation')
+            if operation=='rotate_github_token' and env.get('ROTATION_CONFIRMATION')!=CONFIRMATION:raise GuardError('Explicit secret-only rotation confirmation missing')
+            gh=env.get('NEW_WORKER_GITHUB_TOKEN','');cf=env.get('CLOUDFLARE_API_TOKEN','');account=env.get('CLOUDFLARE_ACCOUNT_ID','')
+            if not gh or not cf or not re.fullmatch('[0-9a-f]{32}',account):raise GuardError('Required authorized secret input missing or invalid')
+            cfbase='https://api.cloudflare.com/client/v4/accounts/'+account+'/workers/scripts/'+WORKER
+            identity=request('verify_new_github_token_owner','https://api.github.com/user',gh)
+            if identity.get('id')!=OWNER_ID:raise GuardError('New GitHub token belongs to an unexpected principal')
+            audit['new_github_token_owner']={'login':identity['login'],'id':identity['id']}
+            audit['github_repositories']=[]
+            for full_name,repository_id in REPOSITORY_IDS.items():
+             repo=request('verify_repo_'+full_name,'https://api.github.com/repos/'+full_name,gh)
+             if repo.get('id')!=repository_id or repo.get('full_name')!=full_name or not repo.get('permissions',{}).get('push'):
+              raise GuardError('New token lacks expected repository identity/write permission')
+             audit['github_repositories'].append({'full_name':full_name,'id':repository_id,'push':True})
+            before=active_version(cf);audit['before']=before
+            if operation=='inspect':audit['status']='inspect_passed_no_write';return audit
+            response=request('rotate_only_GITHUB_TOKEN',cfbase+'/secrets',cf,'PUT',{'name':'GITHUB_TOKEN','text':gh,'type':'secret_text'})
+            audit['secret_write_performed']=True
+            if not isinstance(response,dict) or response.get('name')!='GITHUB_TOKEN':raise GuardError('Cloudflare update returned unexpected metadata')
+            # Do not print/store the response's text field, even if the provider returns it.
+            audit['secret_update_result']={'name':response.get('name'),'type':response.get('type')}
+            after=None
+            for attempt in range(5):
+             after=active_version(cf)
+             if after['version_id']!=before['version_id']:break
+             pause(2)
+            audit['after']=after
+            if after['version_id']==before['version_id']:raise GuardError('Secret update succeeded but new active version not observed')
+            comparisons={name:before[name]==after[name] for name in ['code_etag','other_bindings_sha256','runtime_sha256','binding_names_types']}
+            audit['preservation_checks']=comparisons
+            if not all(comparisons.values()):raise GuardError('Secret rotation changed unexpected resource metadata; stop for review')
+            audit['status']='secret_only_rotation_verified';return audit
+           except Exception as error:
+            audit['status']='failed_stop_for_review'
+            # GuardError strings are fixed labels/statuses. Never expose arbitrary provider exception text.
+            audit['error']=str(error) if isinstance(error,GuardError) else type(error).__name__
+            return audit
+          
+          def main():
+           audit=run()
+           pathlib.Path('cloudflare-secret-audit.json').write_text(json.dumps(audit,indent=2),encoding='utf-8')
+           report='```json\n'+json.dumps(audit,indent=2)+'\n```\n'
+           if os.environ.get('GITHUB_STEP_SUMMARY'):
+            with open(os.environ['GITHUB_STEP_SUMMARY'],'a',encoding='utf-8') as fp:fp.write(report)
+           print(json.dumps(audit,indent=2))
+           return 1 if audit['status']=='failed_stop_for_review' else 0
+          
+          if __name__=='__main__':sys.exit(main())
+          PY
